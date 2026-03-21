@@ -53,15 +53,22 @@ const formatCurrency = (amount) => {
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard'); 
   
-  // 狀態管理
-  const [categories, setCategories] = useState(['A廠商-生鮮', 'B廠商-乾貨', 'C廠商-包材']);
-  const [entries, setEntries] = useState([
-    { id: '1', date: '2026-03-18', category: 'A廠商-生鮮', amount: 5000, isSynced: true },
-    { id: '2', date: '2026-03-19', category: 'B廠商-乾貨', amount: 3200, isSynced: true },
-  ]);
-  const [revenues, setRevenues] = useState([
-    { id: 'r1', date: '2026-03-18', amount: 8500, isSynced: true },
-  ]);
+  // 狀態管理：加入 localStorage 永久記憶 (分類、成本紀錄、營收紀錄)
+  const [categories, setCategories] = useState(() => {
+    const savedCats = localStorage.getItem('purchaseCategories');
+    // 清除舊的預設 ABC 廠商，改為空白預設
+    return savedCats ? JSON.parse(savedCats) : ['未分類廠商'];
+  });
+
+  const [entries, setEntries] = useState(() => {
+    const savedEntries = localStorage.getItem('purchaseEntries');
+    return savedEntries ? JSON.parse(savedEntries) : [];
+  });
+  
+  const [revenues, setRevenues] = useState(() => {
+    const savedRevs = localStorage.getItem('purchaseRevenues');
+    return savedRevs ? JSON.parse(savedRevs) : [];
+  });
 
   // 表單狀態
   const [entryType, setEntryType] = useState('cost'); 
@@ -83,7 +90,10 @@ export default function App() {
   const [syncToast, setSyncToast] = useState({ show: false, message: '', type: 'success' });
 
   // 預算狀態
-  const [weeklyBudget, setWeeklyBudget] = useState(20000);
+  const [weeklyBudget, setWeeklyBudget] = useState(() => {
+    const savedBudget = localStorage.getItem('weeklyBudget');
+    return savedBudget ? Number(savedBudget) : 20000;
+  });
   const [isEditingBudget, setIsEditingBudget] = useState(false);
   const [tempBudget, setTempBudget] = useState(weeklyBudget);
 
@@ -91,14 +101,47 @@ export default function App() {
   const [reportType, setReportType] = useState('weekly'); 
   const [reportViewMode, setReportViewMode] = useState('desktop'); 
 
+  // 當資料改變時，自動儲存到瀏覽器 localStorage
+  useEffect(() => {
+    localStorage.setItem('purchaseCategories', JSON.stringify(categories));
+    if (!categories.includes(category) && categories.length > 0) {
+      setCategory(categories[0]);
+    }
+  }, [categories, category]);
+
+  useEffect(() => {
+    localStorage.setItem('purchaseEntries', JSON.stringify(entries));
+  }, [entries]);
+
+  useEffect(() => {
+    localStorage.setItem('purchaseRevenues', JSON.stringify(revenues));
+  }, [revenues]);
+
   // 處理新增分類
   const handleAddCategory = () => {
-    if (newCategoryName.trim() && !categories.includes(newCategoryName.trim())) {
-      const newCat = newCategoryName.trim();
-      setCategories([...categories, newCat]);
-      setCategory(newCat);
-      setNewCategoryName('');
-      setIsAddingCategory(false);
+    const newCat = newCategoryName.trim();
+    if (!newCat) return;
+
+    if (categories.includes(newCat)) {
+      alert('這個廠商或分類名稱已經存在囉！');
+      return;
+    }
+
+    setCategories([...categories, newCat]);
+    setCategory(newCat);
+    setNewCategoryName('');
+    setIsAddingCategory(false);
+  };
+
+  // 處理刪除分類
+  const handleRemoveCategory = (catToRemove) => {
+    if (categories.length <= 1) {
+      alert('請至少保留一個廠商分類喔！(如果您想刪除預設，請先新增一個自己的廠商)');
+      return;
+    }
+    const confirmDelete = window.confirm(`確定要刪除「${catToRemove}」嗎？\n(這不會影響過去已經登錄的歷史紀錄)`);
+    if (confirmDelete) {
+      setCategories(categories.filter(c => c !== catToRemove));
     }
   };
 
@@ -120,7 +163,7 @@ export default function App() {
       id: Date.now().toString(),
       date,
       amount: parseFloat(amount),
-      isSynced: false // 標記為尚未同步
+      isSynced: false
     };
 
     if (entryType === 'cost') {
@@ -156,13 +199,11 @@ export default function App() {
     setIsSyncing(true);
 
     try {
-      // 將所有未同步的資料打包成一個陣列 (Payload)
       const payload = [
         ...unsyncedEntries.map(e => ({ date: e.date, type: '進貨成本', category: e.category, amount: e.amount })),
         ...unsyncedRevenues.map(r => ({ date: r.date, type: '營業收入', category: '每日營收', amount: r.amount }))
       ];
 
-      // 使用 text/plain 避免跨網域 (CORS) preflight 阻擋問題
       await fetch(webhookUrl, {
         method: 'POST',
         mode: 'no-cors',
@@ -170,15 +211,15 @@ export default function App() {
         body: JSON.stringify(payload)
       });
 
-      // 更新狀態為已同步
+      // 將資料標記為已同步
       setEntries(entries.map(e => ({ ...e, isSynced: true })));
       setRevenues(revenues.map(r => ({ ...r, isSynced: true })));
       
-      setSyncToast({ show: true, message: `成功同步 ${payload.length} 筆紀錄至雲端！`, type: 'success' });
+      setSyncToast({ show: true, message: `成功送出 ${payload.length} 筆紀錄至雲端！`, type: 'success' });
       setTimeout(() => setSyncToast({ show: false, message: '', type: 'success' }), 3000);
     } catch (error) {
       console.error('Sync Error:', error);
-      setSyncToast({ show: true, message: '同步失敗，請檢查網路連線或網址是否正確。', type: 'error' });
+      setSyncToast({ show: true, message: '連線異常，請檢查網路連線狀態。', type: 'error' });
       setTimeout(() => setSyncToast({ show: false, message: '', type: 'success' }), 3000);
     } finally {
       setIsSyncing(false);
@@ -200,13 +241,14 @@ export default function App() {
     if (!editingEntry.date || !editingEntry.amount || isNaN(editingEntry.amount)) return;
     if (editingEntry.recordType === 'cost' && !editingEntry.category) return;
     
+    // 編輯後將狀態改回「未同步」，確保修改內容會被送到雲端 (如果未來需要更新表單)
     if (editingEntry.recordType === 'cost') {
       setEntries(entries.map(entry => 
-        entry.id === editingEntry.id ? { ...editingEntry, amount: parseFloat(editingEntry.amount) } : entry
+        entry.id === editingEntry.id ? { ...editingEntry, amount: parseFloat(editingEntry.amount), isSynced: false } : entry
       ).sort((a, b) => new Date(b.date) - new Date(a.date)));
     } else {
       setRevenues(revenues.map(rev => 
-        rev.id === editingEntry.id ? { ...editingEntry, amount: parseFloat(editingEntry.amount) } : rev
+        rev.id === editingEntry.id ? { ...editingEntry, amount: parseFloat(editingEntry.amount), isSynced: false } : rev
       ).sort((a, b) => new Date(b.date) - new Date(a.date)));
     }
     
@@ -215,11 +257,13 @@ export default function App() {
 
   // 儲存預算
   const handleSaveBudget = () => {
-    setWeeklyBudget(Number(tempBudget));
+    const newBudget = Number(tempBudget);
+    setWeeklyBudget(newBudget);
+    localStorage.setItem('weeklyBudget', newBudget.toString());
     setIsEditingBudget(false);
   };
 
-  // 匯出 CSV (供 Google 表單/試算表使用)
+  // 匯出 CSV
   const exportToCSV = () => {
     const BOM = '\uFEFF';
     const headers = ['日期', '週區間(週三起)', '類型', '廠商/分類', '金額'];
@@ -228,6 +272,11 @@ export default function App() {
       ...entries.map(e => ({ ...e, type: '進貨成本' })),
       ...revenues.map(r => ({ ...r, type: '營業收入', category: '每日營收' }))
     ].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    if (combined.length === 0) {
+      alert("目前尚無任何紀錄可匯出！");
+      return;
+    }
 
     const csvRows = combined.map(e => 
       `${e.date},${getCustomWeekRange(e.date)},${e.type},${e.category},${e.amount}`
@@ -245,31 +294,23 @@ export default function App() {
     document.body.removeChild(link);
   };
 
-  // 計算本週(週三至週二)的資料與餘額邏輯
   const todayString = new Date().toISOString().split('T')[0];
   const currentWeekString = getCustomWeekRange(todayString);
-  
   const currentWeekEntries = entries.filter(entry => getCustomWeekRange(entry.date) === currentWeekString);
   const currentWeekTotal = currentWeekEntries.reduce((sum, entry) => sum + entry.amount, 0);
   
   const remainingAmount = weeklyBudget - currentWeekTotal;
   const remainingRatio = weeklyBudget > 0 ? remainingAmount / weeklyBudget : 0;
-  
-  // 核心邏輯：低於 30% 紅色，大於等於 30% 綠色
   const isLowBudget = remainingRatio < 0.3;
   const isOverBudget = remainingAmount < 0;
-  
-  // 進度條長度 (花費比例)
   const spentPercentage = weeklyBudget > 0 ? Math.min((currentWeekTotal / weeklyBudget) * 100, 100) : 0;
 
-  // 合併所有歷史紀錄
   const combinedRecords = useMemo(() => {
     const costs = entries.map(e => ({ ...e, recordType: 'cost' }));
     const revs = revenues.map(r => ({ ...r, recordType: 'revenue', category: '每日營收' }));
     return [...costs, ...revs].sort((a, b) => new Date(b.date) - new Date(a.date));
   }, [entries, revenues]);
 
-  // 計算報表資料
   const reportData = useMemo(() => {
     const data = {};
     entries.forEach(entry => {
@@ -292,14 +333,11 @@ export default function App() {
       .sort((a, b) => b.period.localeCompare(a.period));
   }, [entries, revenues, reportType]);
 
-  // 計算尚未同步的數量
   const unsyncedCount = entries.filter(e => !e.isSynced).length + revenues.filter(r => !r.isSynced).length;
 
   return (
-    // 使用淺茶色 bg-[#F5F0EA] 作為全站主背景，文字使用深褐色
     <div className="min-h-screen bg-[#F5F0EA] text-[#4A3B32] font-sans pb-20 md:pb-0">
       
-      {/* 同步提示 Toast */}
       {syncToast.show && (
         <div className={`fixed top-20 left-1/2 transform -translate-x-1/2 z-50 px-6 py-3 rounded-xl shadow-lg flex items-center gap-3 transition-all duration-300 ${syncToast.type === 'success' ? 'bg-[#FFFDFB] border-l-4 border-emerald-500 text-[#4A3B32]' : 'bg-[#FFFDFB] border-l-4 border-red-500 text-[#4A3B32]'}`}>
           {syncToast.type === 'success' ? <CheckCircle2 size={20} className="text-emerald-500" /> : <AlertCircle size={20} className="text-red-500" />}
@@ -307,7 +345,6 @@ export default function App() {
         </div>
       )}
 
-      {/* 頂部導覽列：淺茶色與酒紅色點綴 */}
       <header className="bg-[#FFFDFB] shadow-sm border-b border-[#E8DFD5] sticky top-0 z-10">
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2 text-[#7A303F]">
@@ -321,7 +358,6 @@ export default function App() {
               <NavButton active={activeTab === 'reports'} onClick={() => setActiveTab('reports')} icon={<BarChart3 size={18}/>} label="統計報表" />
             </div>
             
-            {/* 手動同步按鈕 */}
             <button 
               onClick={handleManualSync}
               disabled={isSyncing}
@@ -335,26 +371,21 @@ export default function App() {
               )}
             </button>
 
-            {/* 設定按鈕 */}
             <button 
               onClick={() => setShowSettings(true)}
               className="p-2 text-[#8C7A6B] hover:text-[#7A303F] hover:bg-[#F5E6E8] rounded-full transition-colors relative ml-1"
             >
               <Settings size={20} />
-              {webhookUrl && <span className="absolute top-1 right-1 w-2 h-2 bg-emerald-500 rounded-full border-2 border-[#FFFDFB] box-content"></span>}
             </button>
           </div>
         </div>
       </header>
 
-      {/* 主要內容區 */}
       <main className="max-w-4xl mx-auto p-4 mt-4">
         
-        {/* 分頁 1: 首頁登錄 */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
             
-            {/* 預算控制卡片 */}
             <div className="bg-[#FFFDFB] p-6 rounded-2xl shadow-sm border border-[#E8DFD5] relative overflow-hidden">
               <div className="flex justify-between items-start mb-4">
                 <div>
@@ -365,7 +396,6 @@ export default function App() {
                   <p className="text-xs text-[#8C7A6B] mt-1">結算週期：{currentWeekString} (每週三歸零)</p>
                 </div>
                 
-                {/* 預算設定區 */}
                 {!isEditingBudget ? (
                   <div className="text-right flex flex-col items-end">
                     <span className="text-sm text-[#8C7A6B] mb-1">本週設定預算</span>
@@ -392,7 +422,6 @@ export default function App() {
                 )}
               </div>
 
-              {/* 進度條與紅綠燈邏輯 */}
               <div className="space-y-2">
                 <div className="flex justify-between text-sm font-medium">
                   <span className="text-[#8C7A6B]">
@@ -403,7 +432,6 @@ export default function App() {
                   </span>
                 </div>
                 <div className="h-4 w-full bg-[#E8DFD5] rounded-full overflow-hidden border border-[#DBCFC3]">
-                  {/* 進度條顏色：大於等於30%綠色，低於30%紅色 */}
                   <div 
                     className={`h-full transition-all duration-500 rounded-full ${isLowBudget ? 'bg-red-500' : 'bg-emerald-500'}`}
                     style={{ width: `${spentPercentage}%` }}
@@ -417,7 +445,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* 輸入表單 */}
             <div className="bg-[#FFFDFB] rounded-2xl shadow-sm border border-[#E8DFD5] overflow-hidden">
               <div className="p-6 border-b border-[#E8DFD5] bg-[#F5F0EA]/50">
                 <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
@@ -429,7 +456,6 @@ export default function App() {
                     <p className="text-sm text-[#8C7A6B] mt-1">請選擇登錄「進貨成本」或「每日營收」。</p>
                   </div>
                   
-                  {/* 類型切換按鈕 */}
                   <div className="flex bg-[#E8DFD5]/60 p-1 rounded-xl w-fit">
                     <button
                       type="button"
@@ -454,11 +480,10 @@ export default function App() {
               </div>
               
               <form onSubmit={handleSubmit} className="p-6 space-y-5">
-                {/* 顯示成功訊息 */}
                 {showSuccess && (
                   <div className="bg-emerald-50 text-emerald-700 p-3 rounded-lg flex items-center gap-2 text-sm font-medium animate-pulse border border-emerald-100">
                     <CheckCircle2 size={18} />
-                    登錄成功！已加入本地紀錄。
+                    登錄成功！資料已安全保存在您的設備中。
                   </div>
                 )}
 
@@ -562,7 +587,6 @@ export default function App() {
           </div>
         )}
 
-        {/* 分頁 2: 歷史紀錄 */}
         {activeTab === 'records' && (
           <div className="bg-[#FFFDFB] rounded-2xl shadow-sm border border-[#E8DFD5] overflow-hidden">
              <div className="p-6 border-b border-[#E8DFD5] bg-[#F5F0EA]/50 flex justify-between items-center flex-wrap gap-4">
@@ -649,7 +673,6 @@ export default function App() {
           </div>
         )}
 
-        {/* 分頁 3: 統計報表 */}
         {activeTab === 'reports' && (
           <div className="space-y-6">
             <div className="bg-[#FFFDFB] p-4 rounded-2xl shadow-sm border border-[#E8DFD5] flex flex-col md:flex-row justify-between items-center gap-4">
@@ -823,42 +846,71 @@ export default function App() {
         )}
       </main>
 
-      {/* 雲端同步設定 Modal */}
+      {/* 系統設定與廠商管理 Modal */}
       {showSettings && (
         <div className="fixed inset-0 bg-stone-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-[#FFFDFB] rounded-2xl shadow-xl border border-[#E8DFD5] w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            <div className="px-6 py-4 border-b border-[#E8DFD5] flex justify-between items-center bg-[#F5F0EA]/50">
+          <div className="bg-[#FFFDFB] rounded-2xl shadow-xl border border-[#E8DFD5] w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]">
+            <div className="px-6 py-4 border-b border-[#E8DFD5] flex justify-between items-center bg-[#F5F0EA]/50 shrink-0">
               <h3 className="font-bold text-lg flex items-center gap-2 text-[#4A3B32]">
-                <CloudLightning size={20} className="text-[#7A303F]" />
-                Google 試算表同步設定
+                <Settings size={20} className="text-[#7A303F]" />
+                系統設定與管理
               </h3>
               <button onClick={() => setShowSettings(false)} className="text-[#8C7A6B] hover:text-[#4A3B32] p-1 rounded-lg hover:bg-[#E8DFD5] transition-colors">
                 <X size={20} />
               </button>
             </div>
-            <form onSubmit={handleSaveSettings} className="p-6 space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm font-semibold text-[#4A3B32]">Google Apps Script Webhook 網址</label>
+            
+            <div className="p-6 overflow-y-auto space-y-6">
+              {/* 廠商管理區塊 */}
+              <div className="space-y-3">
+                <label className="text-sm font-bold text-[#4A3B32] flex items-center gap-2">
+                  <Tag size={16} className="text-[#7A303F]" />
+                  廠商 / 分類管理
+                </label>
+                <div className="max-h-48 overflow-y-auto space-y-2 border border-[#DBCFC3] rounded-xl p-2 bg-[#F5F0EA]">
+                  {categories.map(cat => (
+                    <div key={cat} className="flex justify-between items-center bg-[#FFFDFB] px-3 py-2 rounded-lg border border-[#E8DFD5] shadow-sm">
+                      <span className="text-sm text-[#4A3B32] font-medium">{cat}</span>
+                      <button 
+                        type="button" 
+                        onClick={() => handleRemoveCategory(cat)} 
+                        className="text-[#8C7A6B] hover:text-red-500 p-1 rounded transition-colors"
+                        title="刪除此分類"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-[#8C7A6B]">如需刪除預設，請先至首頁新增至少一個您自己的廠商。</p>
+              </div>
+
+              <hr className="border-[#E8DFD5]" />
+
+              {/* Webhook 同步設定區塊 */}
+              <div className="space-y-3">
+                <label className="text-sm font-bold text-[#4A3B32] flex items-center gap-2">
+                  <CloudLightning size={16} className="text-[#7A303F]" />
+                  Google 試算表同步設定
+                </label>
                 <textarea 
-                  rows="3"
+                  rows="2"
                   placeholder="https://script.google.com/macros/s/..."
                   value={tempWebhookUrl}
                   onChange={(e) => setTempWebhookUrl(e.target.value)}
-                  className="w-full p-3 rounded-xl border border-[#DBCFC3] bg-[#F5F0EA] focus:bg-[#FFFDFB] focus:ring-2 focus:ring-[#7A303F] outline-none transition-all text-sm"
+                  className="w-full p-3 rounded-xl border border-[#DBCFC3] bg-[#F5F0EA] focus:bg-[#FFFDFB] focus:ring-2 focus:ring-[#7A303F] outline-none transition-all text-xs"
                 />
-                <p className="text-xs text-[#8C7A6B] mt-2">
-                  設定完成後，您可以透過點擊右上角的「同步」按鈕，將所有尚未上傳的紀錄一次傳送至試算表，避免網路不穩導致遺漏。
-                </p>
               </div>
-              <div className="pt-4 flex gap-3">
-                <button type="button" onClick={() => setShowSettings(false)} className="flex-1 py-3 bg-[#E8DFD5] hover:bg-[#DBCFC3] text-[#4A3B32] rounded-xl font-bold transition-colors">
-                  取消
-                </button>
-                <button type="submit" className="flex-1 py-3 bg-[#7A303F] hover:bg-[#5E2430] text-white rounded-xl font-bold shadow-md transition-all">
-                  儲存設定
-                </button>
-              </div>
-            </form>
+            </div>
+
+            <div className="p-4 border-t border-[#E8DFD5] bg-[#F5F0EA]/50 flex gap-3 shrink-0">
+              <button type="button" onClick={() => setShowSettings(false)} className="flex-1 py-3 bg-[#E8DFD5] hover:bg-[#DBCFC3] text-[#4A3B32] rounded-xl font-bold transition-colors">
+                關閉
+              </button>
+              <button onClick={handleSaveSettings} className="flex-1 py-3 bg-[#7A303F] hover:bg-[#5E2430] text-white rounded-xl font-bold shadow-md transition-all">
+                儲存設定
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -993,7 +1045,6 @@ function SimpleLineChart({ data }) {
   );
 }
 
-// 桌面版導覽按鈕元件
 function NavButton({ active, onClick, icon, label }) {
   return (
     <button onClick={onClick} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${active ? 'bg-[#F5E6E8] text-[#7A303F]' : 'text-[#8C7A6B] hover:bg-[#F5F0EA] hover:text-[#4A3B32]'}`}>
@@ -1002,7 +1053,6 @@ function NavButton({ active, onClick, icon, label }) {
   );
 }
 
-// 手機版導覽按鈕元件
 function MobileNavButton({ active, onClick, icon, label }) {
   return (
     <button onClick={onClick} className={`flex flex-col items-center justify-center w-full h-full space-y-1 transition-colors ${active ? 'text-[#7A303F]' : 'text-[#8C7A6B] hover:text-[#4A3B32]'}`}>
