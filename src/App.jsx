@@ -53,10 +53,9 @@ const formatCurrency = (amount) => {
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard'); 
   
-  // 狀態管理：加入 localStorage 永久記憶 (分類、成本紀錄、營收紀錄)
+  // 狀態管理：加入 localStorage 永久記憶
   const [categories, setCategories] = useState(() => {
     const savedCats = localStorage.getItem('purchaseCategories');
-    // 清除舊的預設 ABC 廠商，改為空白預設
     return savedCats ? JSON.parse(savedCats) : ['未分類廠商'];
   });
 
@@ -73,7 +72,7 @@ export default function App() {
   // 表單狀態
   const [entryType, setEntryType] = useState('cost'); 
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [category, setCategory] = useState(categories[0]);
+  const [category, setCategory] = useState(categories[0] || '');
   const [amount, setAmount] = useState('');
   const [isAddingCategory, setIsAddingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
@@ -82,11 +81,15 @@ export default function App() {
   // 編輯與設定狀態
   const [editingEntry, setEditingEntry] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [webhookUrl, setWebhookUrl] = useState(() => localStorage.getItem('sheetWebhookUrl') || '');
+  
+  // 預設綁定您的 Google 試算表網址，同事的裝置一開啟就會自動帶入！
+  const DEFAULT_WEBHOOK = 'https://script.google.com/macros/s/AKfycbzL5ZKrzuWhUgATAdRWNH5oyfzxQAJ-7CXXIWUbspSqn8EUh7WdLdEF8hkkoTP9iyI/exec';
+  const [webhookUrl, setWebhookUrl] = useState(() => localStorage.getItem('sheetWebhookUrl') || DEFAULT_WEBHOOK);
   const [tempWebhookUrl, setTempWebhookUrl] = useState(webhookUrl);
   
   // 同步狀態
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [syncToast, setSyncToast] = useState({ show: false, message: '', type: 'success' });
 
   // 預算狀態
@@ -100,6 +103,14 @@ export default function App() {
   // 報表檢視狀態
   const [reportType, setReportType] = useState('weekly'); 
   const [reportViewMode, setReportViewMode] = useState('desktop'); 
+
+  // 網頁一載入時，自動從雲端下載最新資料與廠商 (實現團隊跨裝置同步)
+  useEffect(() => {
+    if (webhookUrl) {
+      handleDownloadFromCloud();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 當資料改變時，自動儲存到瀏覽器 localStorage
   useEffect(() => {
@@ -151,6 +162,63 @@ export default function App() {
     setWebhookUrl(tempWebhookUrl);
     localStorage.setItem('sheetWebhookUrl', tempWebhookUrl);
     setShowSettings(false);
+    // 設定完新網址後自動下載一次
+    handleDownloadFromCloud();
+  };
+
+  // 從雲端下載資料的專屬功能
+  const handleDownloadFromCloud = async () => {
+    if (!webhookUrl) return;
+    setIsDownloading(true);
+    try {
+      const response = await fetch(webhookUrl, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+      
+      // 確保回傳正確再解析
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      
+      if (Array.isArray(data)) {
+        const newEntries = [];
+        const newRevenues = [];
+        const catSet = new Set(categories); // 保留本機已經有的廠商
+
+        data.forEach(row => {
+          if (row.type === '進貨成本') {
+            newEntries.push({ id: row.id || Date.now().toString() + Math.random(), date: row.date, category: row.category, amount: Number(row.amount), isSynced: true });
+            catSet.add(row.category); // 自動從雲端紀錄中萃取出廠商清單
+          } else if (row.type === '營業收入') {
+            newRevenues.push({ id: row.id || Date.now().toString() + Math.random(), date: row.date, category: '每日營收', amount: Number(row.amount), isSynced: true });
+          }
+        });
+
+        // 重新排序並寫入畫面
+        setEntries(newEntries.sort((a,b) => new Date(b.date) - new Date(a.date)));
+        setRevenues(newRevenues.sort((a,b) => new Date(b.date) - new Date(a.date)));
+        setCategories(Array.from(catSet));
+        
+        setSyncToast({ show: true, message: '成功載入雲端最新資料！', type: 'success' });
+        setTimeout(() => setSyncToast({ show: false, message: '', type: 'success' }), 2000);
+      }
+    } catch (error) {
+      console.error('Download Error:', error);
+      // 新增友善的錯誤提示，避免因 CORS 或權限被擋而靜默報錯
+      setSyncToast({ 
+        show: true, 
+        message: '載入失敗：請確認 Google 腳本部署權限已設為「所有人」。', 
+        type: 'error' 
+      });
+      setTimeout(() => setSyncToast({ show: false, message: '', type: 'success' }), 5000);
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   // 處理表單送出
@@ -178,7 +246,7 @@ export default function App() {
     setTimeout(() => setShowSuccess(false), 2000);
   };
 
-  // 手動同步功能
+  // 手動同步功能 (改為全量覆蓋模式，確保多設備的刪除與修改完美同步)
   const handleManualSync = async () => {
     if (!webhookUrl) {
       setSyncToast({ show: true, message: '請先於右上角 ⚙️ 設定 Google Webhook 網址！', type: 'error' });
@@ -187,40 +255,39 @@ export default function App() {
       return;
     }
 
-    const unsyncedEntries = entries.filter(e => !e.isSynced);
-    const unsyncedRevenues = revenues.filter(r => !r.isSynced);
-
-    if (unsyncedEntries.length === 0 && unsyncedRevenues.length === 0) {
-      setSyncToast({ show: true, message: '目前沒有需要同步的新紀錄！', type: 'success' });
-      setTimeout(() => setSyncToast({ show: false, message: '', type: 'success' }), 2000);
-      return;
-    }
-
     setIsSyncing(true);
 
     try {
-      const payload = [
-        ...unsyncedEntries.map(e => ({ date: e.date, type: '進貨成本', category: e.category, amount: e.amount })),
-        ...unsyncedRevenues.map(r => ({ date: r.date, type: '營業收入', category: '每日營收', amount: r.amount }))
-      ];
+      // 將畫面上所有最新的資料打包，傳送給 Google Sheets 進行全量覆蓋
+      const payload = {
+        action: 'overwrite',
+        data: [
+          ...entries.map(e => ({ id: e.id, date: e.date, type: '進貨成本', category: e.category, amount: e.amount })),
+          ...revenues.map(r => ({ id: r.id, date: r.date, type: '營業收入', category: '每日營收', amount: r.amount }))
+        ]
+      };
 
-      await fetch(webhookUrl, {
+      const response = await fetch(webhookUrl, {
         method: 'POST',
-        mode: 'no-cors',
+        // 使用 text/plain 繞過瀏覽器的複雜跨域阻擋機制
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(payload)
       });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
 
-      // 將資料標記為已同步
+      // 將所有資料標記為已同步
       setEntries(entries.map(e => ({ ...e, isSynced: true })));
       setRevenues(revenues.map(r => ({ ...r, isSynced: true })));
       
-      setSyncToast({ show: true, message: `成功送出 ${payload.length} 筆紀錄至雲端！`, type: 'success' });
+      setSyncToast({ show: true, message: `雲端資料庫已同步至最新狀態！`, type: 'success' });
       setTimeout(() => setSyncToast({ show: false, message: '', type: 'success' }), 3000);
     } catch (error) {
       console.error('Sync Error:', error);
-      setSyncToast({ show: true, message: '連線異常，請檢查網路連線狀態。', type: 'error' });
-      setTimeout(() => setSyncToast({ show: false, message: '', type: 'success' }), 3000);
+      setSyncToast({ show: true, message: '上傳失敗：請確認網路連線與 Google 腳本權限。', type: 'error' });
+      setTimeout(() => setSyncToast({ show: false, message: '', type: 'success' }), 5000);
     } finally {
       setIsSyncing(false);
     }
@@ -229,9 +296,9 @@ export default function App() {
   // 刪除紀錄
   const handleDelete = (id, type) => {
     if (type === 'cost') {
-      setEntries(entries.filter(entry => entry.id !== id));
+      setEntries(entries.filter(entry => entry.id !== id).map(e => ({...e, isSynced: false})));
     } else {
-      setRevenues(revenues.filter(rev => rev.id !== id));
+      setRevenues(revenues.filter(rev => rev.id !== id).map(r => ({...r, isSynced: false})));
     }
   };
 
@@ -241,7 +308,7 @@ export default function App() {
     if (!editingEntry.date || !editingEntry.amount || isNaN(editingEntry.amount)) return;
     if (editingEntry.recordType === 'cost' && !editingEntry.category) return;
     
-    // 編輯後將狀態改回「未同步」，確保修改內容會被送到雲端 (如果未來需要更新表單)
+    // 編輯後將狀態改回「未同步」，確保修改內容會被送到雲端
     if (editingEntry.recordType === 'cost') {
       setEntries(entries.map(entry => 
         entry.id === editingEntry.id ? { ...editingEntry, amount: parseFloat(editingEntry.amount), isSynced: false } : entry
@@ -601,12 +668,20 @@ export default function App() {
                 </div>
                 <div className="flex gap-2 flex-wrap">
                   <button
+                    onClick={handleDownloadFromCloud}
+                    disabled={isDownloading}
+                    className="flex items-center gap-2 px-4 py-2 bg-[#F5F0EA] text-[#8C7A6B] hover:bg-[#E8DFD5] border border-[#DBCFC3] rounded-lg text-sm font-bold transition-colors disabled:opacity-50"
+                  >
+                    <Download size={16} className={isDownloading ? 'animate-bounce' : ''} /> 
+                    {isDownloading ? '載入中...' : '雲端載入最新'}
+                  </button>
+                  <button
                     onClick={handleManualSync}
                     disabled={isSyncing || unsyncedCount === 0}
                     className="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-sm font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <CloudLightning size={16} className={isSyncing ? 'animate-bounce' : ''} /> 
-                    {isSyncing ? '同步中...' : `一鍵同步試算表 ${unsyncedCount > 0 ? `(${unsyncedCount}筆未同步)` : '(已最新)'}`}
+                    {isSyncing ? '同步中...' : `上傳雲端 ${unsyncedCount > 0 ? `(${unsyncedCount}筆未同步)` : '(已最新)'}`}
                   </button>
                   <button
                     onClick={exportToCSV}
