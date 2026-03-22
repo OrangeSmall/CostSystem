@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   Calendar, 
   DollarSign, 
@@ -20,7 +20,9 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   Settings,
-  CloudLightning
+  CloudLightning,
+  Search,
+  ChevronDown
 } from 'lucide-react';
 
 // 輔助函數：取得該日期的「自訂週區間」 (週三至下週二)
@@ -49,6 +51,88 @@ const getMonthString = (dateString) => {
 const formatCurrency = (amount) => {
   return new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 }).format(amount);
 };
+
+// 專屬元件：具備搜尋功能的下拉選單
+function SearchableSelect({ value, onChange, options, placeholder = "搜尋或選擇廠商..." }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const wrapperRef = useRef(null);
+
+  // 點擊外部自動關閉選單
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
+        setIsOpen(false);
+        setSearch('');
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const filteredOptions = options.filter(opt => opt.toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <div ref={wrapperRef} className="relative flex-1">
+      <div
+        className={`flex items-center justify-between w-full p-3 rounded-xl border border-[#DBCFC3] transition-all cursor-text min-h-[50px] ${isOpen ? 'bg-[#FFFDFB] ring-2 ring-[#7A303F]' : 'bg-[#F5F0EA] hover:bg-[#FFFDFB]'}`}
+        onClick={() => setIsOpen(true)}
+      >
+        {isOpen ? (
+          <div className="flex items-center w-full gap-2">
+            <Search size={16} className="text-[#8C7A6B] shrink-0" />
+            <input
+              type="text"
+              className="w-full bg-transparent outline-none text-[#4A3B32] placeholder-[#8C7A6B]"
+              placeholder="輸入關鍵字搜尋..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault(); // 防止觸發外層表單送出
+                  if (filteredOptions.length > 0) {
+                    onChange(filteredOptions[0]);
+                    setIsOpen(false);
+                    setSearch('');
+                  }
+                }
+              }}
+              autoFocus
+            />
+          </div>
+        ) : (
+          <div className="flex items-center justify-between w-full">
+            <span className="text-[#4A3B32] truncate pr-2">{value || placeholder}</span>
+            <ChevronDown size={16} className="text-[#8C7A6B] shrink-0" />
+          </div>
+        )}
+      </div>
+
+      {isOpen && (
+        <div className="absolute z-50 w-full mt-2 max-h-60 overflow-y-auto bg-[#FFFDFB] border border-[#E8DFD5] rounded-xl shadow-xl">
+          {filteredOptions.length > 0 ? (
+            filteredOptions.map(opt => (
+              <div
+                key={opt}
+                className={`px-4 py-3 hover:bg-[#F5E6E8] cursor-pointer text-[#4A3B32] border-b border-[#F5F0EA] last:border-0 transition-colors ${value === opt ? 'bg-[#F5E6E8] font-bold text-[#7A303F]' : ''}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onChange(opt);
+                  setIsOpen(false);
+                  setSearch('');
+                }}
+              >
+                {opt}
+              </div>
+            ))
+          ) : (
+            <div className="px-4 py-4 text-[#8C7A6B] text-center text-sm bg-[#F5F0EA]/30">找不到符合的廠商</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard'); 
@@ -592,25 +676,21 @@ export default function App() {
                       
                       {!isAddingCategory ? (
                         <div className="flex gap-2">
-                          <select 
+                          <SearchableSelect 
                             value={category}
-                            onChange={(e) => setCategory(e.target.value)}
-                            className="flex-1 p-3 rounded-xl border border-[#DBCFC3] bg-[#F5F0EA] focus:bg-[#FFFDFB] focus:ring-2 focus:ring-[#7A303F] outline-none transition-all appearance-none"
-                          >
-                            {categories.map(cat => (
-                              <option key={cat} value={cat}>{cat}</option>
-                            ))}
-                          </select>
+                            onChange={setCategory}
+                            options={categories}
+                          />
                           <button 
                             type="button"
                             onClick={() => setIsAddingCategory(true)}
-                            className="p-3 bg-[#E8DFD5] text-[#4A3B32] hover:bg-[#DBCFC3] rounded-xl transition-colors font-medium flex items-center whitespace-nowrap"
+                            className="p-3 bg-[#E8DFD5] text-[#4A3B32] hover:bg-[#DBCFC3] rounded-xl transition-colors font-medium flex items-center whitespace-nowrap h-[50px]"
                           >
                             <Plus size={18} /> 新增
                           </button>
                         </div>
                       ) : (
-                        <div className="flex gap-2">
+                        <div className="flex gap-2 h-[50px]">
                           <input 
                             type="text" 
                             placeholder="輸入新廠商或分類..."
@@ -1034,15 +1114,11 @@ export default function App() {
               {editingEntry.recordType === 'cost' && (
                 <div className="space-y-2">
                   <label className="text-sm font-semibold text-[#4A3B32]">廠商 / 分類</label>
-                  <select 
+                  <SearchableSelect 
                     value={editingEntry.category}
-                    onChange={(e) => setEditingEntry({...editingEntry, category: e.target.value})}
-                    className="w-full p-3 rounded-xl border border-[#DBCFC3] bg-[#F5F0EA] focus:bg-[#FFFDFB] focus:ring-2 focus:ring-[#7A303F] outline-none transition-all"
-                  >
-                    {categories.map(cat => (
-                      <option key={cat} value={cat}>{cat}</option>
-                    ))}
-                  </select>
+                    onChange={(val) => setEditingEntry({...editingEntry, category: val})}
+                    options={categories}
+                  />
                 </div>
               )}
 
