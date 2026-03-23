@@ -166,6 +166,9 @@ export default function App() {
   const [editingEntry, setEditingEntry] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   
+  // 歷史紀錄的搜尋狀態
+  const [recordSearch, setRecordSearch] = useState('');
+
   // 預設綁定您的 Google 試算表網址，同事的裝置一開啟就會自動帶入！
   const DEFAULT_WEBHOOK = 'https://script.google.com/macros/s/AKfycbzL5ZKrzuWhUgATAdRWNH5oyfzxQAJ-7CXXIWUbspSqn8EUh7WdLdEF8hkkoTP9iyI/exec';
   const [webhookUrl, setWebhookUrl] = useState(() => localStorage.getItem('sheetWebhookUrl') || DEFAULT_WEBHOOK);
@@ -471,11 +474,27 @@ export default function App() {
   const isOverBudget = remainingAmount < 0;
   const spentPercentage = weeklyBudget > 0 ? Math.min((currentWeekTotal / weeklyBudget) * 100, 100) : 0;
 
+  // 組合所有紀錄 (原始)
   const combinedRecords = useMemo(() => {
     const costs = entries.map(e => ({ ...e, recordType: 'cost' }));
     const revs = revenues.map(r => ({ ...r, recordType: 'revenue', category: '每日營收' }));
     return [...costs, ...revs].sort((a, b) => new Date(b.date) - new Date(a.date));
   }, [entries, revenues]);
+
+  // 過濾後的紀錄 (用於歷史紀錄頁面搜尋顯示)
+  const filteredCombinedRecords = useMemo(() => {
+    if (!recordSearch.trim()) return combinedRecords;
+    const query = recordSearch.toLowerCase();
+    return combinedRecords.filter(entry => {
+      const typeStr = entry.recordType === 'cost' ? '進貨支出' : '每日營收';
+      return (
+        entry.date.includes(query) ||
+        entry.category.toLowerCase().includes(query) ||
+        entry.amount.toString().includes(query) ||
+        typeStr.includes(query)
+      );
+    });
+  }, [combinedRecords, recordSearch]);
 
   const reportData = useMemo(() => {
     const data = {};
@@ -759,7 +778,7 @@ export default function App() {
                     歷史帳務明細
                   </h2>
                   <span className="text-sm text-[#8C7A6B] bg-[#FFFDFB] px-3 py-1 rounded-full border border-[#DBCFC3]">
-                    共 {combinedRecords.length} 筆
+                    共 {filteredCombinedRecords.length} 筆 {recordSearch && '(搜尋結果)'}
                   </span>
                 </div>
                 <div className="flex gap-2 flex-wrap">
@@ -783,10 +802,33 @@ export default function App() {
                     onClick={exportToCSV}
                     className="flex items-center gap-2 px-4 py-2 bg-[#F5E6E8] text-[#7A303F] hover:bg-[#EAC0C6] border border-[#EAC0C6] rounded-lg text-sm font-bold transition-colors"
                   >
-                    <Download size={16} /> 匯出 CSV 手動備份
+                    <Download size={16} /> 匯出 CSV
                   </button>
                 </div>
               </div>
+
+              {/* 搜尋框區塊 */}
+              <div className="p-4 bg-[#F5F0EA]/30 border-b border-[#E8DFD5]">
+                <div className="relative max-w-md">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8C7A6B]" size={18} />
+                  <input
+                    type="text"
+                    placeholder="搜尋日期、廠商、營收或金額..."
+                    value={recordSearch}
+                    onChange={(e) => setRecordSearch(e.target.value)}
+                    className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-[#DBCFC3] bg-[#FFFDFB] focus:ring-2 focus:ring-[#7A303F] outline-none transition-all text-sm text-[#4A3B32] shadow-sm"
+                  />
+                  {recordSearch && (
+                    <button 
+                      onClick={() => setRecordSearch('')} 
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8C7A6B] hover:text-[#4A3B32] p-1 rounded-full hover:bg-[#E8DFD5] transition-colors"
+                    >
+                      <X size={16}/>
+                    </button>
+                  )}
+                </div>
+              </div>
+
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
@@ -798,12 +840,14 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {combinedRecords.length === 0 ? (
+                    {filteredCombinedRecords.length === 0 ? (
                       <tr>
-                        <td colSpan="4" className="p-8 text-center text-[#8C7A6B]">目前尚無紀錄</td>
+                        <td colSpan="4" className="p-8 text-center text-[#8C7A6B]">
+                          {recordSearch ? '找不到符合的搜尋結果' : '目前尚無紀錄'}
+                        </td>
                       </tr>
                     ) : (
-                      combinedRecords.map(entry => (
+                      filteredCombinedRecords.map(entry => (
                         <tr key={entry.id} className="border-b border-[#F5F0EA] hover:bg-[#F5F0EA]/80 transition-colors">
                           <td className="p-4 text-[#4A3B32]">{entry.date}</td>
                           <td className="p-4">
@@ -824,12 +868,14 @@ export default function App() {
                               <button 
                                 onClick={() => setEditingEntry(entry)}
                                 className="text-[#8C7A6B] hover:text-[#7A303F] transition-colors p-1"
+                                title="編輯"
                               >
                                 <Pencil size={16} />
                               </button>
                               <button 
                                 onClick={() => handleDelete(entry.id, entry.recordType)}
                                 className="text-[#8C7A6B] hover:text-red-500 transition-colors p-1"
+                                title="刪除"
                               >
                                 <Trash2 size={16} />
                               </button>
