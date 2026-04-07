@@ -58,7 +58,6 @@ function SearchableSelect({ value, onChange, options, placeholder = "搜尋或�
   const [search, setSearch] = useState('');
   const wrapperRef = useRef(null);
 
-  // 點擊外部自動關閉選單
   useEffect(() => {
     function handleClickOutside(event) {
       if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
@@ -89,7 +88,7 @@ function SearchableSelect({ value, onChange, options, placeholder = "搜尋或�
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
-                  e.preventDefault(); // 防止觸發外層表單送出
+                  e.preventDefault();
                   if (filteredOptions.length > 0) {
                     onChange(filteredOptions[0]);
                     setIsOpen(false);
@@ -134,26 +133,90 @@ function SearchableSelect({ value, onChange, options, placeholder = "搜尋或�
   );
 }
 
+// 系統主層：負責管理「店鋪清單」與「當前作用的店鋪」
 export default function App() {
+  const [stores, setStores] = useState(() => {
+    const s = localStorage.getItem('purchaseStores');
+    if (s) return JSON.parse(s);
+    
+    // 無痛升級：讀取舊版 Webhook
+    const oldUrl = localStorage.getItem('sheetWebhookUrl');
+    const defaultUrl = 'https://script.google.com/macros/s/AKfycbzL5ZKrzuWhUgATAdRWNH5oyfzxQAJ-7CXXIWUbspSqn8EUh7WdLdEF8hkkoTP9iyI/exec';
+    return [{ id: 'default', name: '預設主店鋪', webhookUrl: oldUrl || defaultUrl }];
+  });
+
+  const [activeStoreId, setActiveStoreId] = useState(() => localStorage.getItem('activeStoreId') || 'default');
+
+  const activeStore = stores.find(s => s.id === activeStoreId) || stores[0];
+
+  return (
+    <StoreManager
+      key={activeStore.id} // 當店鋪切換時，強制重新掛載元件以隔離資料
+      store={activeStore}
+      stores={stores}
+      setStores={(newStores) => {
+        setStores(newStores);
+        localStorage.setItem('purchaseStores', JSON.stringify(newStores));
+      }}
+      activeStoreId={activeStoreId}
+      setActiveStoreId={(id) => {
+        setActiveStoreId(id);
+        localStorage.setItem('activeStoreId', id);
+      }}
+    />
+  );
+}
+
+// 店鋪管理層：獨立運作單一店鋪的資料與邏輯
+function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreId }) {
   const [activeTab, setActiveTab] = useState('dashboard'); 
+  const [showSettings, setShowSettings] = useState(false);
   
-  // 狀態管理：加入 localStorage 永久記憶
+  // 歷史紀錄的搜尋狀態
+  const [recordSearch, setRecordSearch] = useState('');
+
+  // 狀態管理：使用店鋪 ID 區隔 localStorage
   const [categories, setCategories] = useState(() => {
-    const savedCats = localStorage.getItem('purchaseCategories');
-    return savedCats ? JSON.parse(savedCats) : ['未分類廠商'];
+    const specific = localStorage.getItem(`purchaseCategories_${store.id}`);
+    if (specific) return JSON.parse(specific);
+    if (store.id === 'default') {
+       const old = localStorage.getItem('purchaseCategories');
+       if (old) return JSON.parse(old);
+    }
+    return ['未分類廠商'];
   });
 
   const [entries, setEntries] = useState(() => {
-    const savedEntries = localStorage.getItem('purchaseEntries');
-    return savedEntries ? JSON.parse(savedEntries) : [];
+    const specific = localStorage.getItem(`purchaseEntries_${store.id}`);
+    if (specific) return JSON.parse(specific);
+    if (store.id === 'default') {
+       const old = localStorage.getItem('purchaseEntries');
+       if (old) return JSON.parse(old);
+    }
+    return [];
   });
   
   const [revenues, setRevenues] = useState(() => {
-    const savedRevs = localStorage.getItem('purchaseRevenues');
-    return savedRevs ? JSON.parse(savedRevs) : [];
+    const specific = localStorage.getItem(`purchaseRevenues_${store.id}`);
+    if (specific) return JSON.parse(specific);
+    if (store.id === 'default') {
+       const old = localStorage.getItem('purchaseRevenues');
+       if (old) return JSON.parse(old);
+    }
+    return [];
   });
 
-  // 表單狀態
+  const [weeklyBudget, setWeeklyBudget] = useState(() => {
+    const specific = localStorage.getItem(`weeklyBudget_${store.id}`);
+    if (specific) return Number(specific);
+    if (store.id === 'default') {
+       const old = localStorage.getItem('weeklyBudget');
+       if (old) return Number(old);
+    }
+    return 20000;
+  });
+
+  // 表單與 UI 狀態
   const [entryType, setEntryType] = useState('cost'); 
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [category, setCategory] = useState(categories[0] || '');
@@ -161,62 +224,46 @@ export default function App() {
   const [isAddingCategory, setIsAddingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [showSuccess, setShowSuccess] = useState(false);
-
-  // 編輯與設定狀態
   const [editingEntry, setEditingEntry] = useState(null);
-  const [showSettings, setShowSettings] = useState(false);
   
-  // 歷史紀錄的搜尋狀態
-  const [recordSearch, setRecordSearch] = useState('');
-
-  // 預設綁定您的 Google 試算表網址，同事的裝置一開啟就會自動帶入！
-  const DEFAULT_WEBHOOK = 'https://script.google.com/macros/s/AKfycbzL5ZKrzuWhUgATAdRWNH5oyfzxQAJ-7CXXIWUbspSqn8EUh7WdLdEF8hkkoTP9iyI/exec';
-  const [webhookUrl, setWebhookUrl] = useState(() => localStorage.getItem('sheetWebhookUrl') || DEFAULT_WEBHOOK);
-  const [tempWebhookUrl, setTempWebhookUrl] = useState(webhookUrl);
-  
-  // 同步狀態
   const [isSyncing, setIsSyncing] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [syncToast, setSyncToast] = useState({ show: false, message: '', type: 'success' });
 
-  // 預算狀態 (新增追蹤是否已同步至雲端的狀態)
-  const [weeklyBudget, setWeeklyBudget] = useState(() => {
-    const savedBudget = localStorage.getItem('weeklyBudget');
-    return savedBudget ? Number(savedBudget) : 20000;
-  });
   const [isEditingBudget, setIsEditingBudget] = useState(false);
   const [tempBudget, setTempBudget] = useState(weeklyBudget);
   const [isBudgetSynced, setIsBudgetSynced] = useState(true);
 
-  // 報表檢視狀態
   const [reportType, setReportType] = useState('weekly'); 
   const [reportViewMode, setReportViewMode] = useState('desktop'); 
 
-  // 網頁一載入時，自動從雲端下載最新資料與廠商 (實現團隊跨裝置同步)
+  // 設定彈窗的暫存店鋪資料
+  const [tempStores, setTempStores] = useState(stores);
+
+  // 切換店鋪時自動下載雲端資料
   useEffect(() => {
-    if (webhookUrl) {
+    if (store.webhookUrl) {
       handleDownloadFromCloud();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 當資料改變時，自動儲存到瀏覽器 localStorage
+  // 當資料改變時，自動儲存到對應的瀏覽器 localStorage
   useEffect(() => {
-    localStorage.setItem('purchaseCategories', JSON.stringify(categories));
+    localStorage.setItem(`purchaseCategories_${store.id}`, JSON.stringify(categories));
     if (!categories.includes(category) && categories.length > 0) {
       setCategory(categories[0]);
     }
-  }, [categories, category]);
+  }, [categories, category, store.id]);
 
   useEffect(() => {
-    localStorage.setItem('purchaseEntries', JSON.stringify(entries));
-  }, [entries]);
+    localStorage.setItem(`purchaseEntries_${store.id}`, JSON.stringify(entries));
+  }, [entries, store.id]);
 
   useEffect(() => {
-    localStorage.setItem('purchaseRevenues', JSON.stringify(revenues));
-  }, [revenues]);
+    localStorage.setItem(`purchaseRevenues_${store.id}`, JSON.stringify(revenues));
+  }, [revenues, store.id]);
 
-  // 處理新增分類
   const handleAddCategory = () => {
     const newCat = newCategoryName.trim();
     if (!newCat) return;
@@ -225,56 +272,38 @@ export default function App() {
       alert('這個廠商或分類名稱已經存在囉！');
       return;
     }
-
     setCategories([...categories, newCat]);
     setCategory(newCat);
     setNewCategoryName('');
     setIsAddingCategory(false);
   };
 
-  // 處理刪除分類
   const handleRemoveCategory = (catToRemove) => {
     if (categories.length <= 1) {
-      alert('請至少保留一個廠商分類喔！(如果您想刪除預設，請先新增一個自己的廠商)');
+      alert('請至少保留一個廠商分類喔！');
       return;
     }
-    const confirmDelete = window.confirm(`確定要刪除「${catToRemove}」嗎？\n(這不會影響過去已經登錄的歷史紀錄)`);
-    if (confirmDelete) {
+    if (window.confirm(`確定要刪除「${catToRemove}」嗎？\n(不影響已登錄的歷史紀錄)`)) {
       setCategories(categories.filter(c => c !== catToRemove));
     }
   };
 
-  // 儲存 Webhook 設定
-  const handleSaveSettings = (e) => {
-    e.preventDefault();
-    setWebhookUrl(tempWebhookUrl);
-    localStorage.setItem('sheetWebhookUrl', tempWebhookUrl);
-    setShowSettings(false);
-    // 設定完新網址後自動下載一次
-    handleDownloadFromCloud();
-  };
-
-  // 從雲端下載資料與預算設定
+  // 從雲端下載資料
   const handleDownloadFromCloud = async () => {
-    if (!webhookUrl) return;
+    if (!store.webhookUrl) return;
     setIsDownloading(true);
     try {
-      const response = await fetch(webhookUrl, {
+      const response = await fetch(store.webhookUrl, {
         method: 'GET',
-        headers: {
-          'Accept': 'application/json'
-        }
+        headers: { 'Accept': 'application/json' }
       });
       
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       
       const json = await response.json();
       let data = [];
       let fetchedBudget = null;
 
-      // 判斷雲端回傳的是舊版陣列，還是新版包含預算的物件格式
       if (Array.isArray(json)) {
         data = json;
       } else if (json && json.data) {
@@ -282,11 +311,10 @@ export default function App() {
         if (json.budget !== undefined) fetchedBudget = json.budget;
       }
 
-      // 載入預算設定
       if (fetchedBudget !== null) {
         setWeeklyBudget(Number(fetchedBudget));
         setTempBudget(Number(fetchedBudget));
-        localStorage.setItem('weeklyBudget', fetchedBudget.toString());
+        localStorage.setItem(`weeklyBudget_${store.id}`, fetchedBudget.toString());
         setIsBudgetSynced(true);
       }
       
@@ -308,23 +336,18 @@ export default function App() {
         setRevenues(newRevenues.sort((a,b) => new Date(b.date) - new Date(a.date)));
         setCategories(Array.from(catSet));
         
-        setSyncToast({ show: true, message: '成功載入雲端最新資料與設定！', type: 'success' });
+        setSyncToast({ show: true, message: `【${store.name}】雲端資料載入成功！`, type: 'success' });
         setTimeout(() => setSyncToast({ show: false, message: '', type: 'success' }), 2000);
       }
     } catch (error) {
       console.error('Download Error:', error);
-      setSyncToast({ 
-        show: true, 
-        message: '載入失敗：請確認 Google 腳本部署權限已設為「所有人」。', 
-        type: 'error' 
-      });
+      setSyncToast({ show: true, message: '載入失敗：請確認網址或權限設定。', type: 'error' });
       setTimeout(() => setSyncToast({ show: false, message: '', type: 'success' }), 5000);
     } finally {
       setIsDownloading(false);
     }
   };
 
-  // 處理表單送出
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!date || !amount || isNaN(amount)) return;
@@ -349,10 +372,9 @@ export default function App() {
     setTimeout(() => setShowSuccess(false), 2000);
   };
 
-  // 手動同步功能 (包含預算數值)
   const handleManualSync = async () => {
-    if (!webhookUrl) {
-      setSyncToast({ show: true, message: '請先於右上角 ⚙️ 設定 Google Webhook 網址！', type: 'error' });
+    if (!store.webhookUrl) {
+      setSyncToast({ show: true, message: '請先於 ⚙️ 設定此店鋪的 Webhook 網址！', type: 'error' });
       setTimeout(() => setSyncToast({ show: false, message: '', type: 'success' }), 3000);
       setShowSettings(true);
       return;
@@ -363,39 +385,36 @@ export default function App() {
     try {
       const payload = {
         action: 'overwrite',
-        budget: weeklyBudget, // 將最新的預算數值打包送出
+        budget: weeklyBudget,
         data: [
           ...entries.map(e => ({ id: e.id, date: e.date, type: '進貨成本', category: e.category, amount: e.amount })),
           ...revenues.map(r => ({ id: r.id, date: r.date, type: '營業收入', category: '每日營收', amount: r.amount }))
         ]
       };
 
-      const response = await fetch(webhookUrl, {
+      const response = await fetch(store.webhookUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(payload)
       });
       
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
       setEntries(entries.map(e => ({ ...e, isSynced: true })));
       setRevenues(revenues.map(r => ({ ...r, isSynced: true })));
-      setIsBudgetSynced(true); // 標記預算已成功同步
+      setIsBudgetSynced(true);
       
-      setSyncToast({ show: true, message: `雲端資料庫已同步至最新狀態！`, type: 'success' });
+      setSyncToast({ show: true, message: `【${store.name}】已成功同步至雲端！`, type: 'success' });
       setTimeout(() => setSyncToast({ show: false, message: '', type: 'success' }), 3000);
     } catch (error) {
       console.error('Sync Error:', error);
-      setSyncToast({ show: true, message: '上傳失敗：請確認網路連線與 Google 腳本權限。', type: 'error' });
+      setSyncToast({ show: true, message: '上傳失敗：請確認網路與權限。', type: 'error' });
       setTimeout(() => setSyncToast({ show: false, message: '', type: 'success' }), 5000);
     } finally {
       setIsSyncing(false);
     }
   };
 
-  // 刪除紀錄
   const handleDelete = (id, type) => {
     if (type === 'cost') {
       setEntries(entries.filter(entry => entry.id !== id).map(e => ({...e, isSynced: false})));
@@ -404,7 +423,6 @@ export default function App() {
     }
   };
 
-  // 儲存編輯紀錄
   const handleSaveEdit = (e) => {
     e.preventDefault();
     if (!editingEntry.date || !editingEntry.amount || isNaN(editingEntry.amount)) return;
@@ -419,24 +437,29 @@ export default function App() {
         rev.id === editingEntry.id ? { ...editingEntry, amount: parseFloat(editingEntry.amount), isSynced: false } : rev
       ).sort((a, b) => new Date(b.date) - new Date(a.date)));
     }
-    
     setEditingEntry(null);
   };
 
-  // 儲存預算 (觸發未同步狀態)
   const handleSaveBudget = () => {
     const newBudget = Number(tempBudget);
     setWeeklyBudget(newBudget);
-    localStorage.setItem('weeklyBudget', newBudget.toString());
+    localStorage.setItem(`weeklyBudget_${store.id}`, newBudget.toString());
     setIsEditingBudget(false);
-    setIsBudgetSynced(false); // 標記預算已修改，需要同步
+    setIsBudgetSynced(false);
   };
 
-  // 匯出 CSV
+  // 儲存設定 (多店鋪更新)
+  const handleSaveSettings = () => {
+    setStores(tempStores);
+    if (!tempStores.find(s => s.id === activeStoreId)) {
+       setActiveStoreId(tempStores[0].id);
+    }
+    setShowSettings(false);
+  };
+
   const exportToCSV = () => {
     const BOM = '\uFEFF';
     const headers = ['日期', '週區間(週三起)', '類型', '廠商/分類', '金額'];
-    
     const combined = [
       ...entries.map(e => ({ ...e, type: '進貨成本' })),
       ...revenues.map(r => ({ ...r, type: '營業收入', category: '每日營收' }))
@@ -450,14 +473,13 @@ export default function App() {
     const csvRows = combined.map(e => 
       `${e.date},${getCustomWeekRange(e.date)},${e.type},${e.category},${e.amount}`
     );
-    
     const csvContent = BOM + [headers.join(','), ...csvRows].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     
     const link = document.createElement('a');
     link.href = url;
-    link.download = `進貨與營收紀錄_${new Date().toISOString().split('T')[0]}.csv`;
+    link.download = `[${store.name}]_進貨營收紀錄_${new Date().toISOString().split('T')[0]}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -474,14 +496,12 @@ export default function App() {
   const isOverBudget = remainingAmount < 0;
   const spentPercentage = weeklyBudget > 0 ? Math.min((currentWeekTotal / weeklyBudget) * 100, 100) : 0;
 
-  // 組合所有紀錄 (原始)
   const combinedRecords = useMemo(() => {
     const costs = entries.map(e => ({ ...e, recordType: 'cost' }));
     const revs = revenues.map(r => ({ ...r, recordType: 'revenue', category: '每日營收' }));
     return [...costs, ...revs].sort((a, b) => new Date(b.date) - new Date(a.date));
   }, [entries, revenues]);
 
-  // 過濾後的紀錄 (用於歷史紀錄頁面搜尋顯示)
   const filteredCombinedRecords = useMemo(() => {
     if (!recordSearch.trim()) return combinedRecords;
     const query = recordSearch.toLowerCase();
@@ -518,7 +538,6 @@ export default function App() {
       .sort((a, b) => b.period.localeCompare(a.period));
   }, [entries, revenues, reportType]);
 
-  // 如果帳務紀錄或「預算設定」有變更，系統都會亮起紅燈提示同步
   const unsyncedCount = entries.filter(e => !e.isSynced).length + revenues.filter(r => !r.isSynced).length + (!isBudgetSynced ? 1 : 0);
 
   return (
@@ -527,15 +546,23 @@ export default function App() {
       {syncToast.show && (
         <div className={`fixed top-20 left-1/2 transform -translate-x-1/2 z-50 px-6 py-3 rounded-xl shadow-lg flex items-center gap-3 transition-all duration-300 ${syncToast.type === 'success' ? 'bg-[#FFFDFB] border-l-4 border-emerald-500 text-[#4A3B32]' : 'bg-[#FFFDFB] border-l-4 border-red-500 text-[#4A3B32]'}`}>
           {syncToast.type === 'success' ? <CheckCircle2 size={20} className="text-emerald-500" /> : <AlertCircle size={20} className="text-red-500" />}
-          <span className="font-bold text-sm">{syncToast.message}</span>
+          <span className="font-bold text-sm whitespace-nowrap">{syncToast.message}</span>
         </div>
       )}
 
+      {/* 頂部包含店鋪切換的導覽列 */}
       <header className="bg-[#FFFDFB] shadow-sm border-b border-[#E8DFD5] sticky top-0 z-10">
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2 text-[#7A303F]">
-            <LayoutDashboard size={24} className="text-[#7A303F]" />
-            <h1 className="text-xl font-bold tracking-wide">進貨成本追蹤系統</h1>
+            <LayoutDashboard size={24} className="text-[#7A303F] hidden md:block" />
+            <h1 className="text-lg md:text-xl font-bold tracking-wide hidden md:block">成本追蹤系統</h1>
+            <select
+              value={activeStoreId}
+              onChange={(e) => setActiveStoreId(e.target.value)}
+              className="md:ml-2 bg-[#F5E6E8] text-[#7A303F] font-bold py-1.5 px-3 rounded-lg border-none outline-none cursor-pointer text-sm md:text-base max-w-[150px] md:max-w-xs"
+            >
+              {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
           </div>
           <div className="flex items-center gap-2">
             <div className="hidden md:flex gap-1 mr-2">
@@ -548,7 +575,7 @@ export default function App() {
               onClick={handleManualSync}
               disabled={isSyncing}
               className="flex items-center gap-1 p-2 md:px-3 text-[#8C7A6B] hover:text-[#7A303F] hover:bg-[#F5E6E8] rounded-xl transition-colors font-bold text-sm relative disabled:opacity-50"
-              title="手動同步至 Google 試算表"
+              title="同步當前店鋪"
             >
               <CloudLightning size={20} className={isSyncing ? 'animate-pulse text-[#A87C63]' : ''} />
               <span className="hidden md:inline">{isSyncing ? '同步中' : '同步'}</span>
@@ -558,7 +585,10 @@ export default function App() {
             </button>
 
             <button 
-              onClick={() => setShowSettings(true)}
+              onClick={() => {
+                setTempStores(stores); // 打開設定時載入最新清單
+                setShowSettings(true);
+              }}
               className="p-2 text-[#8C7A6B] hover:text-[#7A303F] hover:bg-[#F5E6E8] rounded-full transition-colors relative ml-1"
             >
               <Settings size={20} />
@@ -579,12 +609,12 @@ export default function App() {
                     <TrendingUp className="text-[#7A303F]" size={20} />
                     本週進貨預算控制
                   </h2>
-                  <p className="text-xs text-[#8C7A6B] mt-1">結算週期：{currentWeekString} (每週三歸零)</p>
+                  <p className="text-xs text-[#8C7A6B] mt-1">結算週期：{currentWeekString}</p>
                 </div>
                 
                 {!isEditingBudget ? (
                   <div className="text-right flex flex-col items-end">
-                    <span className="text-sm text-[#8C7A6B] mb-1">本週設定預算</span>
+                    <span className="text-sm text-[#8C7A6B] mb-1">預算設定</span>
                     <button 
                       onClick={() => setIsEditingBudget(true)}
                       className="flex items-center gap-1 text-lg font-bold text-[#4A3B32] hover:text-[#7A303F] transition-colors bg-[#F5F0EA] px-3 py-1 rounded-lg border border-[#E8DFD5]"
@@ -639,7 +669,7 @@ export default function App() {
                       <Plus className="text-[#7A303F]" size={20} />
                       新增帳務紀錄
                     </h2>
-                    <p className="text-sm text-[#8C7A6B] mt-1">請選擇登錄「進貨成本」或「每日營收」。</p>
+                    <p className="text-sm text-[#8C7A6B] mt-1">目前登錄店鋪：<span className="font-bold text-[#7A303F]">{store.name}</span></p>
                   </div>
                   
                   <div className="flex bg-[#E8DFD5]/60 p-1 rounded-xl w-fit">
@@ -669,7 +699,7 @@ export default function App() {
                 {showSuccess && (
                   <div className="bg-emerald-50 text-emerald-700 p-3 rounded-lg flex items-center gap-2 text-sm font-medium animate-pulse border border-emerald-100">
                     <CheckCircle2 size={18} />
-                    登錄成功！資料已安全保存在您的設備中。
+                    登錄成功！資料已保存在【{store.name}】的本機紀錄。
                   </div>
                 )}
 
@@ -796,7 +826,7 @@ export default function App() {
                     className="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-sm font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <CloudLightning size={16} className={isSyncing ? 'animate-bounce' : ''} /> 
-                    {isSyncing ? '同步中...' : `上傳雲端 ${unsyncedCount > 0 ? `(${unsyncedCount}筆變更)` : '(已最新)'}`}
+                    {isSyncing ? '同步中...' : `上傳雲端 ${unsyncedCount > 0 ? `(${unsyncedCount}變更)` : ''}`}
                   </button>
                   <button
                     onClick={exportToCSV}
@@ -1078,11 +1108,64 @@ export default function App() {
             </div>
             
             <div className="p-6 overflow-y-auto space-y-6">
+              
+              {/* 分店與資料庫設定 */}
+              <div className="space-y-3">
+                <label className="text-sm font-bold text-[#4A3B32] flex items-center gap-2">
+                  <CloudLightning size={16} className="text-[#7A303F]" />
+                  分店與連線設定 (多店管理)
+                </label>
+                <div className="max-h-60 overflow-y-auto space-y-3 pr-1">
+                  {tempStores.map(s => (
+                    <div key={s.id} className="bg-[#FFFDFB] p-3 rounded-xl border border-[#DBCFC3] relative space-y-2">
+                        <div className="flex justify-between items-center">
+                          <input
+                              value={s.name}
+                              onChange={(e) => setTempStores(tempStores.map(ts => ts.id === s.id ? { ...ts, name: e.target.value } : ts))}
+                              placeholder="店名 (例如: 四維店)"
+                              className="font-bold text-[#4A3B32] bg-transparent border-b border-[#DBCFC3] outline-none focus:border-[#7A303F] w-2/3 pb-1"
+                          />
+                          <button
+                              type="button"
+                              onClick={() => {
+                                if(tempStores.length <= 1) { alert('請至少保留一個店鋪設定！'); return; }
+                                if(window.confirm('確定要刪除這個店鋪設定嗎？\n(這不會刪除雲端資料，但本機會失去連線)')) {
+                                  setTempStores(tempStores.filter(ts => ts.id !== s.id));
+                                }
+                              }}
+                              className="text-[#8C7A6B] hover:text-red-500 p-1 rounded transition-colors"
+                          >
+                              <Trash2 size={16} />
+                          </button>
+                        </div>
+                        <textarea
+                          rows="2"
+                          value={s.webhookUrl}
+                          onChange={(e) => setTempStores(tempStores.map(ts => ts.id === s.id ? { ...ts, webhookUrl: e.target.value } : ts))}
+                          placeholder="貼上專屬此店的 Google Apps Script 網址..."
+                          className="w-full p-2 rounded-lg border border-[#E8DFD5] bg-[#F5F0EA] focus:bg-[#FFFDFB] focus:ring-1 focus:ring-[#7A303F] outline-none text-xs"
+                        />
+                    </div>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTempStores([...tempStores, { id: Date.now().toString(), name: '新分店', webhookUrl: '' }]);
+                  }}
+                  className="w-full py-2 bg-[#F5E6E8] text-[#7A303F] rounded-xl font-bold hover:bg-[#EAC0C6] transition-colors text-sm flex items-center justify-center gap-1 mt-2"
+                >
+                  <Plus size={16}/> 新增分店
+                </button>
+              </div>
+
+              <hr className="border-[#E8DFD5]" />
+
               {/* 廠商管理區塊 */}
               <div className="space-y-3">
                 <label className="text-sm font-bold text-[#4A3B32] flex items-center gap-2">
                   <Tag size={16} className="text-[#7A303F]" />
-                  廠商 / 分類管理
+                  【{store.name}】廠商分類管理
                 </label>
                 <div className="max-h-48 overflow-y-auto space-y-2 border border-[#DBCFC3] rounded-xl p-2 bg-[#F5F0EA]">
                   {categories.map(cat => (
@@ -1102,22 +1185,6 @@ export default function App() {
                 <p className="text-xs text-[#8C7A6B]">如需刪除預設，請先至首頁新增至少一個您自己的廠商。</p>
               </div>
 
-              <hr className="border-[#E8DFD5]" />
-
-              {/* Webhook 同步設定區塊 */}
-              <div className="space-y-3">
-                <label className="text-sm font-bold text-[#4A3B32] flex items-center gap-2">
-                  <CloudLightning size={16} className="text-[#7A303F]" />
-                  Google 試算表同步設定
-                </label>
-                <textarea 
-                  rows="2"
-                  placeholder="https://script.google.com/macros/s/..."
-                  value={tempWebhookUrl}
-                  onChange={(e) => setTempWebhookUrl(e.target.value)}
-                  className="w-full p-3 rounded-xl border border-[#DBCFC3] bg-[#F5F0EA] focus:bg-[#FFFDFB] focus:ring-2 focus:ring-[#7A303F] outline-none transition-all text-xs"
-                />
-              </div>
             </div>
 
             <div className="p-4 border-t border-[#E8DFD5] bg-[#F5F0EA]/50 flex gap-3 shrink-0">
@@ -1203,6 +1270,7 @@ export default function App() {
 
 // SVG 折線圖元件
 function SimpleLineChart({ data }) {
+  const [hoverIndex, setHoverIndex] = useState(null);
   const chartData = [...data].reverse();
   if (chartData.length < 1) return null;
 
@@ -1226,8 +1294,8 @@ function SimpleLineChart({ data }) {
           <span className="flex items-center gap-1 text-[#7A303F]"><div className="w-3 h-3 bg-[#7A303F] rounded-full"></div>成本</span>
         </div>
       </div>
-      <div className="min-w-[500px]">
-        <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-full text-xs font-sans">
+      <div className="min-w-[500px] relative">
+        <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-auto text-xs font-sans overflow-visible">
           {[0, 0.25, 0.5, 0.75, 1].map(ratio => {
             const y = h - p - (ratio * (h - 2 * p));
             return (
@@ -1237,21 +1305,88 @@ function SimpleLineChart({ data }) {
               </g>
             )
           })}
+
+          {/* 垂直對齊輔助線 */}
+          {hoverIndex !== null && (
+            <line 
+              x1={getX(hoverIndex)} y1={p} 
+              x2={getX(hoverIndex)} y2={h-p} 
+              stroke="#DBCFC3" strokeWidth="2" strokeDasharray="4 4" 
+              className="transition-all duration-200"
+            />
+          )}
+
           {chartData.length > 1 && (
             <>
               <polyline points={costPoints} fill="none" stroke="#7A303F" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
               <polyline points={revPoints} fill="none" stroke="#10b981" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
             </>
           )}
+          
           {chartData.map((d, i) => (
             <g key={i}>
-              <circle cx={getX(i)} cy={getY(d.totalCost)} r="4" fill="#7A303F" />
-              <circle cx={getX(i)} cy={getY(d.totalRevenue)} r="4" fill="#10b981" />
-              <text x={getX(i)} y={h - p + 20} textAnchor="middle" fill="#8C7A6B" className="text-[10px] md:text-xs">
+              <circle cx={getX(i)} cy={getY(d.totalCost)} r={hoverIndex === i ? "6" : "4"} fill="#7A303F" className="transition-all duration-200" />
+              <circle cx={getX(i)} cy={getY(d.totalRevenue)} r={hoverIndex === i ? "6" : "4"} fill="#10b981" className="transition-all duration-200" />
+              <text x={getX(i)} y={h - p + 20} textAnchor="middle" fill={hoverIndex === i ? "#4A3B32" : "#8C7A6B"} className={`text-[10px] md:text-xs transition-colors ${hoverIndex === i ? 'font-bold' : ''}`}>
                 {d.period.split(' ~ ')[0].substring(5)}
               </text>
             </g>
           ))}
+
+          {/* 隱藏的 Hover 感應區塊 (滑鼠不需精準點擊圓點也能觸發) */}
+          {chartData.map((d, i) => {
+            const x = getX(i);
+            const width = chartData.length > 1 ? (w - 2 * p) / (chartData.length - 1) : 100;
+            return (
+              <rect
+                key={`hit-${i}`}
+                x={x - width / 2}
+                y={0}
+                width={width}
+                height={h}
+                fill="transparent"
+                onMouseEnter={() => setHoverIndex(i)}
+                onMouseLeave={() => setHoverIndex(null)}
+                className="cursor-pointer outline-none"
+              />
+            );
+          })}
+
+          {/* Tooltip 資訊浮窗 */}
+          {hoverIndex !== null && (() => {
+            const d = chartData[hoverIndex];
+            // 智慧計算 Tooltip 位置，避免右側或頂部超出版面被裁切
+            let ttX = getX(hoverIndex) + 15;
+            if (ttX + 160 > w) ttX = getX(hoverIndex) - 175;
+            
+            let ttY = Math.min(getY(d.totalCost), getY(d.totalRevenue)) - 50;
+            if (ttY < 10) ttY = 10;
+            if (ttY + 120 > h) ttY = h - 120;
+
+            return (
+              <foreignObject x={ttX} y={ttY} width="160" height="130" className="pointer-events-none transition-all duration-200">
+                <div className="bg-[#4A3B32]/95 backdrop-blur-md text-[#FFFDFB] p-3 rounded-xl shadow-xl text-sm w-full h-full box-border flex flex-col justify-center border border-[#8C7A6B]/30">
+                  <div className="font-bold mb-2 border-b border-[#8C7A6B]/50 pb-1 text-center whitespace-nowrap text-xs">
+                    {d.period}
+                  </div>
+                  <div className="flex justify-between gap-3 mb-1">
+                    <span className="text-emerald-400 text-xs">營收</span>
+                    <span className="font-semibold text-xs">{formatCurrency(d.totalRevenue)}</span>
+                  </div>
+                  <div className="flex justify-between gap-3 mb-1">
+                    <span className="text-rose-400 text-xs">成本</span>
+                    <span className="font-semibold text-xs">{formatCurrency(d.totalCost)}</span>
+                  </div>
+                  <div className="flex justify-between gap-3 mt-1 pt-2 border-t border-[#8C7A6B]/50 font-bold">
+                    <span className="text-[#E8DFD5] text-xs">毛利</span>
+                    <span className={`text-xs ${d.totalRevenue - d.totalCost >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {formatCurrency(d.totalRevenue - d.totalCost)}
+                    </span>
+                  </div>
+                </div>
+              </foreignObject>
+            );
+          })()}
         </svg>
       </div>
     </div>
