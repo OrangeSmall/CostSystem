@@ -219,7 +219,7 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
     return 20000;
   });
 
-  // 新增：年度營收目標狀態
+  // 年度營收目標狀態：支援跨設備同步設定
   const [annualTarget, setAnnualTarget] = useState(() => {
     const specific = localStorage.getItem(`annualTarget_${store.id}`);
     if (specific) return Number(specific);
@@ -303,7 +303,7 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
     }
   };
 
-  // 從雲端下載資料
+  // 從雲端下載資料，現在完全支援同步「年度營收目標」
   const handleDownloadFromCloud = async () => {
     if (!store.webhookUrl) return;
     setIsDownloading(true);
@@ -396,6 +396,7 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
     setTimeout(() => setShowSuccess(false), 2000);
   };
 
+  // 手動同步功能 (包含預算與年度目標數值)
   const handleManualSync = async () => {
     if (!store.webhookUrl) {
       setSyncToast({ show: true, message: '請先於 ⚙️ 設定此店鋪的 Webhook 網址！', type: 'error' });
@@ -526,7 +527,7 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
   const todayString = today.toISOString().split('T')[0];
   const currentWeekString = getCustomWeekRange(todayString);
 
-  // 1. 每週進貨預算計算 (原始邏輯)
+  // 1. 每週進貨預算計算
   const currentWeekEntries = entries.filter(entry => getCustomWeekRange(entry.date) === currentWeekString);
   const currentWeekTotal = currentWeekEntries.reduce((sum, entry) => sum + entry.amount, 0);
   
@@ -536,7 +537,7 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
   const isOverBudget = remainingAmount < 0;
   const spentPercentage = weeklyBudget > 0 ? Math.min((currentWeekTotal / weeklyBudget) * 100, 100) : 0;
 
-  // 2. 本月損益估算 (基於真實日曆月份)
+  // 2. 本月損益估算
   const currentMonthEntries = entries.filter(e => {
     const d = new Date(e.date);
     return d.getFullYear() === currentYear && d.getMonth() === currentMonth;
@@ -662,150 +663,67 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
             
-            {/* 新增：本月損益速覽卡片 */}
-            <div className="bg-[#FFFDFB] p-6 rounded-2xl shadow-sm border border-[#E8DFD5]">
-              <h2 className="text-lg font-bold flex items-center gap-2 text-[#4A3B32] mb-5">
-                <CalendarDays className="text-[#7A303F]" size={20} />
-                {currentYear} 年 {currentMonth + 1} 月 損益速覽
-              </h2>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="bg-emerald-50 rounded-xl p-4 border border-emerald-100 flex flex-col justify-center">
-                  <div className="text-xs text-emerald-700 font-bold mb-1 flex items-center gap-1"><ArrowUpRight size={14}/>本月總營收</div>
-                  <div className="text-xl md:text-2xl font-black text-emerald-600">{formatCurrency(currentMonthTotalRevenue)}</div>
+            {/* 首頁：本週預算控制卡片 */}
+            <div className="bg-[#FFFDFB] p-6 rounded-2xl shadow-sm border border-[#E8DFD5] relative overflow-hidden">
+              <div className="flex justify-between items-start mb-4">
+                <div>
+                  <h2 className="text-lg font-bold flex items-center gap-2 text-[#4A3B32]">
+                    <TrendingUp className="text-[#7A303F]" size={20} />
+                    本週進貨預算控制
+                  </h2>
+                  <p className="text-xs text-[#8C7A6B] mt-1">週期：{currentWeekString}</p>
                 </div>
-                <div className="bg-[#F5E6E8] rounded-xl p-4 border border-[#EAC0C6] flex flex-col justify-center">
-                  <div className="text-xs text-[#7A303F] font-bold mb-1 flex items-center gap-1"><ArrowDownRight size={14}/>本月總成本</div>
-                  <div className="text-xl md:text-2xl font-black text-[#7A303F]">{formatCurrency(currentMonthTotalCost)}</div>
-                </div>
-                <div className="bg-[#F5F0EA] rounded-xl p-4 border border-[#DBCFC3] flex flex-col justify-center shadow-inner">
-                  <div className="text-xs text-[#4A3B32] font-bold mb-1 flex items-center gap-1"><Wallet size={14}/>本月預估毛利</div>
-                  <div className={`text-xl md:text-2xl font-black ${currentMonthGrossProfit >= 0 ? 'text-[#A87C63]' : 'text-red-500'}`}>
-                    {formatCurrency(currentMonthGrossProfit)}
+                
+                {!isEditingBudget ? (
+                  <div className="text-right flex flex-col items-end">
+                    <span className="text-sm text-[#8C7A6B] mb-1">本週設定預算</span>
+                    <button 
+                      onClick={() => setIsEditingBudget(true)}
+                      className="flex items-center gap-1 text-lg font-bold text-[#4A3B32] hover:text-[#7A303F] transition-colors bg-[#F5F0EA] px-3 py-1 rounded-lg border border-[#E8DFD5]"
+                    >
+                      {formatCurrency(weeklyBudget)}
+                      <Edit2 size={14} className="text-[#8C7A6B]" />
+                    </button>
                   </div>
+                ) : (
+                  <div className="flex gap-2 items-center bg-[#F5F0EA] p-2 rounded-lg border border-[#E8DFD5]">
+                    <span className="text-sm text-[#8C7A6B]">預算:</span>
+                    <input 
+                      type="number" 
+                      value={tempBudget}
+                      onChange={(e) => setTempBudget(e.target.value)}
+                      className="w-24 p-1 rounded border border-[#DBCFC3] outline-none focus:border-[#7A303F]"
+                      autoFocus
+                    />
+                    <button onClick={handleSaveBudget} className="bg-[#7A303F] text-white px-3 py-1 rounded text-sm hover:bg-[#5E2430]">儲存</button>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm font-medium">
+                  <span className="text-[#8C7A6B]">
+                    累計支出: {formatCurrency(currentWeekTotal)}
+                  </span>
+                  <span className={`font-bold ${isLowBudget ? 'text-red-600' : 'text-emerald-600'}`}>
+                    餘額: {formatCurrency(remainingAmount)}
+                  </span>
                 </div>
+                <div className="h-4 w-full bg-[#E8DFD5] rounded-full overflow-hidden border border-[#DBCFC3]">
+                  <div 
+                    className={`h-full transition-all duration-500 rounded-full ${isLowBudget ? 'bg-red-500' : 'bg-emerald-500'}`}
+                    style={{ width: `${spentPercentage}%` }}
+                  ></div>
+                </div>
+                {isOverBudget && (
+                  <p className="text-xs text-red-600 flex items-center gap-1 mt-1 font-bold">
+                    <AlertCircle size={12} /> 警告：本週進貨已超過預算設定！
+                  </p>
+                )}
               </div>
             </div>
 
-            {/* 並排的 目標進度 與 預算控制 */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              
-              {/* 新增：年度營收目標卡片 */}
-              <div className="bg-[#FFFDFB] p-6 rounded-2xl shadow-sm border border-[#E8DFD5] relative overflow-hidden">
-                <div className="flex justify-between items-start mb-4">
-                  <div>
-                    <h2 className="text-lg font-bold flex items-center gap-2 text-[#4A3B32]">
-                      <Target className="text-emerald-600" size={20} />
-                      {currentYear} 年度營收目標
-                    </h2>
-                    <p className="text-xs text-[#8C7A6B] mt-1">追蹤全年累積營業額進度</p>
-                  </div>
-                  
-                  {!isEditingAnnualTarget ? (
-                    <div className="text-right flex flex-col items-end">
-                      <span className="text-sm text-[#8C7A6B] mb-1">年度目標設定</span>
-                      <button 
-                        onClick={() => setIsEditingAnnualTarget(true)}
-                        className="flex items-center gap-1 text-lg font-bold text-[#4A3B32] hover:text-emerald-600 transition-colors bg-[#F5F0EA] px-3 py-1 rounded-lg border border-[#E8DFD5]"
-                      >
-                        {formatCurrency(annualTarget)}
-                        <Edit2 size={14} className="text-[#8C7A6B]" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex gap-2 items-center bg-[#F5F0EA] p-2 rounded-lg border border-[#E8DFD5]">
-                      <span className="text-sm text-[#8C7A6B]">目標:</span>
-                      <input 
-                        type="number" 
-                        value={tempAnnualTarget}
-                        onChange={(e) => setTempAnnualTarget(e.target.value)}
-                        className="w-24 p-1 rounded border border-[#DBCFC3] outline-none focus:border-emerald-600"
-                        autoFocus
-                      />
-                      <button onClick={handleSaveAnnualTarget} className="bg-emerald-600 text-white px-3 py-1 rounded text-sm hover:bg-emerald-700">儲存</button>
-                    </div>
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm font-medium">
-                    <span className="text-[#8C7A6B]">
-                      目前累計: {formatCurrency(currentYearTotalRevenue)}
-                    </span>
-                    <span className="font-bold text-emerald-600">
-                      達成率: {annualProgressPercentage.toFixed(1)}%
-                    </span>
-                  </div>
-                  <div className="h-4 w-full bg-[#E8DFD5] rounded-full overflow-hidden border border-[#DBCFC3]">
-                    <div 
-                      className="h-full transition-all duration-500 rounded-full bg-emerald-500"
-                      style={{ width: `${annualProgressPercentage}%` }}
-                    ></div>
-                  </div>
-                </div>
-              </div>
-
-              {/* 原有：本週預算控制卡片 */}
-              <div className="bg-[#FFFDFB] p-6 rounded-2xl shadow-sm border border-[#E8DFD5] relative overflow-hidden">
-                <div className="flex justify-between items-start mb-4">
-                  <div>
-                    <h2 className="text-lg font-bold flex items-center gap-2 text-[#4A3B32]">
-                      <TrendingUp className="text-[#7A303F]" size={20} />
-                      本週進貨預算控制
-                    </h2>
-                    <p className="text-xs text-[#8C7A6B] mt-1">週期：{currentWeekString}</p>
-                  </div>
-                  
-                  {!isEditingBudget ? (
-                    <div className="text-right flex flex-col items-end">
-                      <span className="text-sm text-[#8C7A6B] mb-1">本週設定預算</span>
-                      <button 
-                        onClick={() => setIsEditingBudget(true)}
-                        className="flex items-center gap-1 text-lg font-bold text-[#4A3B32] hover:text-[#7A303F] transition-colors bg-[#F5F0EA] px-3 py-1 rounded-lg border border-[#E8DFD5]"
-                      >
-                        {formatCurrency(weeklyBudget)}
-                        <Edit2 size={14} className="text-[#8C7A6B]" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex gap-2 items-center bg-[#F5F0EA] p-2 rounded-lg border border-[#E8DFD5]">
-                      <span className="text-sm text-[#8C7A6B]">預算:</span>
-                      <input 
-                        type="number" 
-                        value={tempBudget}
-                        onChange={(e) => setTempBudget(e.target.value)}
-                        className="w-24 p-1 rounded border border-[#DBCFC3] outline-none focus:border-[#7A303F]"
-                        autoFocus
-                      />
-                      <button onClick={handleSaveBudget} className="bg-[#7A303F] text-white px-3 py-1 rounded text-sm hover:bg-[#5E2430]">儲存</button>
-                    </div>
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm font-medium">
-                    <span className="text-[#8C7A6B]">
-                      累計支出: {formatCurrency(currentWeekTotal)}
-                    </span>
-                    <span className={`font-bold ${isLowBudget ? 'text-red-600' : 'text-emerald-600'}`}>
-                      餘額: {formatCurrency(remainingAmount)}
-                    </span>
-                  </div>
-                  <div className="h-4 w-full bg-[#E8DFD5] rounded-full overflow-hidden border border-[#DBCFC3]">
-                    <div 
-                      className={`h-full transition-all duration-500 rounded-full ${isLowBudget ? 'bg-red-500' : 'bg-emerald-500'}`}
-                      style={{ width: `${spentPercentage}%` }}
-                    ></div>
-                  </div>
-                  {isOverBudget && (
-                    <p className="text-xs text-red-600 flex items-center gap-1 mt-1 font-bold">
-                      <AlertCircle size={12} /> 警告：本週進貨已超過預算設定！
-                    </p>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* 原有：新增帳務紀錄表單 */}
+            {/* 首頁：新增帳務紀錄表單 */}
             <div className="bg-[#FFFDFB] rounded-2xl shadow-sm border border-[#E8DFD5] overflow-hidden">
               <div className="p-6 border-b border-[#E8DFD5] bg-[#F5F0EA]/50">
                 <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
@@ -1067,6 +985,86 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
 
         {activeTab === 'reports' && (
           <div className="space-y-6">
+            
+            {/* 搬移過來的：本月損益速覽卡片 */}
+            <div className="bg-[#FFFDFB] p-6 rounded-2xl shadow-sm border border-[#E8DFD5]">
+              <h2 className="text-lg font-bold flex items-center gap-2 text-[#4A3B32] mb-5">
+                <CalendarDays className="text-[#7A303F]" size={20} />
+                {currentYear} 年 {currentMonth + 1} 月 損益速覽
+              </h2>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="bg-emerald-50 rounded-xl p-4 border border-emerald-100 flex flex-col justify-center">
+                  <div className="text-xs text-emerald-700 font-bold mb-1 flex items-center gap-1"><ArrowUpRight size={14}/>本月總營收</div>
+                  <div className="text-xl md:text-2xl font-black text-emerald-600">{formatCurrency(currentMonthTotalRevenue)}</div>
+                </div>
+                <div className="bg-[#F5E6E8] rounded-xl p-4 border border-[#EAC0C6] flex flex-col justify-center">
+                  <div className="text-xs text-[#7A303F] font-bold mb-1 flex items-center gap-1"><ArrowDownRight size={14}/>本月總成本</div>
+                  <div className="text-xl md:text-2xl font-black text-[#7A303F]">{formatCurrency(currentMonthTotalCost)}</div>
+                </div>
+                <div className="bg-[#F5F0EA] rounded-xl p-4 border border-[#DBCFC3] flex flex-col justify-center shadow-inner">
+                  <div className="text-xs text-[#4A3B32] font-bold mb-1 flex items-center gap-1"><Wallet size={14}/>本月預估毛利</div>
+                  <div className={`text-xl md:text-2xl font-black ${currentMonthGrossProfit >= 0 ? 'text-[#A87C63]' : 'text-red-500'}`}>
+                    {formatCurrency(currentMonthGrossProfit)}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 搬移過來的：年度營收目標卡片 */}
+            <div className="bg-[#FFFDFB] p-6 rounded-2xl shadow-sm border border-[#E8DFD5] relative overflow-hidden">
+              <div className="flex justify-between items-start mb-4">
+                <div>
+                  <h2 className="text-lg font-bold flex items-center gap-2 text-[#4A3B32]">
+                    <Target className="text-emerald-600" size={20} />
+                    {currentYear} 年度營收目標
+                  </h2>
+                  <p className="text-xs text-[#8C7A6B] mt-1">追蹤全年累積營業額進度</p>
+                </div>
+                
+                {!isEditingAnnualTarget ? (
+                  <div className="text-right flex flex-col items-end">
+                    <span className="text-sm text-[#8C7A6B] mb-1">年度目標設定</span>
+                    <button 
+                      onClick={() => setIsEditingAnnualTarget(true)}
+                      className="flex items-center gap-1 text-lg font-bold text-[#4A3B32] hover:text-emerald-600 transition-colors bg-[#F5F0EA] px-3 py-1 rounded-lg border border-[#E8DFD5]"
+                    >
+                      {formatCurrency(annualTarget)}
+                      <Edit2 size={14} className="text-[#8C7A6B]" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2 items-center bg-[#F5F0EA] p-2 rounded-lg border border-[#E8DFD5]">
+                    <span className="text-sm text-[#8C7A6B]">目標:</span>
+                    <input 
+                      type="number" 
+                      value={tempAnnualTarget}
+                      onChange={(e) => setTempAnnualTarget(e.target.value)}
+                      className="w-24 p-1 rounded border border-[#DBCFC3] outline-none focus:border-emerald-600"
+                      autoFocus
+                    />
+                    <button onClick={handleSaveAnnualTarget} className="bg-emerald-600 text-white px-3 py-1 rounded text-sm hover:bg-emerald-700">儲存</button>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm font-medium">
+                  <span className="text-[#8C7A6B]">
+                    目前累計: {formatCurrency(currentYearTotalRevenue)}
+                  </span>
+                  <span className="font-bold text-emerald-600">
+                    達成率: {annualProgressPercentage.toFixed(1)}%
+                  </span>
+                </div>
+                <div className="h-4 w-full bg-[#E8DFD5] rounded-full overflow-hidden border border-[#DBCFC3]">
+                  <div 
+                    className="h-full transition-all duration-500 rounded-full bg-emerald-500"
+                    style={{ width: `${annualProgressPercentage}%` }}
+                  ></div>
+                </div>
+              </div>
+            </div>
+
             <div className="bg-[#FFFDFB] p-4 rounded-2xl shadow-sm border border-[#E8DFD5] flex flex-col md:flex-row justify-between items-center gap-4">
               <div className="flex bg-[#E8DFD5] p-1 rounded-xl w-full md:w-auto">
                 <button
