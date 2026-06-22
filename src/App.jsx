@@ -141,15 +141,12 @@ export default function App() {
   const [stores, setStores] = useState(() => {
     const s = localStorage.getItem('purchaseStores');
     if (s) return JSON.parse(s);
-    
-    // 無痛升級：讀取舊版 Webhook
     const oldUrl = localStorage.getItem('sheetWebhookUrl');
     const defaultUrl = 'https://script.google.com/macros/s/AKfycbzL5ZKrzuWhUgATAdRWNH5oyfzxQAJ-7CXXIWUbspSqn8EUh7WdLdEF8hkkoTP9iyI/exec';
     return [{ id: 'default', name: '預設主店鋪', webhookUrl: oldUrl || defaultUrl }];
   });
 
   const [activeStoreId, setActiveStoreId] = useState(() => localStorage.getItem('activeStoreId') || 'default');
-
   const activeStore = stores.find(s => s.id === activeStoreId) || stores[0];
 
   return (
@@ -174,56 +171,42 @@ export default function App() {
 function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreId }) {
   const [activeTab, setActiveTab] = useState('dashboard'); 
   const [showSettings, setShowSettings] = useState(false);
-  
-  // 歷史紀錄的搜尋狀態
   const [recordSearch, setRecordSearch] = useState('');
 
-  // 狀態管理：使用店鋪 ID 區隔 localStorage
+  // 狀態管理
   const [categories, setCategories] = useState(() => {
     const specific = localStorage.getItem(`purchaseCategories_${store.id}`);
     if (specific) return JSON.parse(specific);
-    if (store.id === 'default') {
-       const old = localStorage.getItem('purchaseCategories');
-       if (old) return JSON.parse(old);
-    }
     return ['未分類廠商'];
   });
 
   const [entries, setEntries] = useState(() => {
     const specific = localStorage.getItem(`purchaseEntries_${store.id}`);
     if (specific) return JSON.parse(specific);
-    if (store.id === 'default') {
-       const old = localStorage.getItem('purchaseEntries');
-       if (old) return JSON.parse(old);
-    }
     return [];
   });
   
   const [revenues, setRevenues] = useState(() => {
     const specific = localStorage.getItem(`purchaseRevenues_${store.id}`);
     if (specific) return JSON.parse(specific);
-    if (store.id === 'default') {
-       const old = localStorage.getItem('purchaseRevenues');
-       if (old) return JSON.parse(old);
-    }
     return [];
   });
 
-  const [weeklyBudget, setWeeklyBudget] = useState(() => {
-    const specific = localStorage.getItem(`weeklyBudget_${store.id}`);
-    if (specific) return Number(specific);
-    if (store.id === 'default') {
-       const old = localStorage.getItem('weeklyBudget');
-       if (old) return Number(old);
-    }
-    return 20000;
+  // 歷史每週預算管理 (物件形式)
+  const [weeklyBudgets, setWeeklyBudgets] = useState(() => {
+    const specific = localStorage.getItem(`weeklyBudgets_${store.id}`);
+    if (specific) return JSON.parse(specific);
+    
+    // 無痛轉移舊的單一預算
+    const oldBudget = localStorage.getItem(`weeklyBudget_${store.id}`);
+    const defaultBudget = oldBudget ? Number(oldBudget) : 20000;
+    return { default: defaultBudget }; 
   });
 
-  // 年度營收目標狀態：支援跨設備同步設定
   const [annualTarget, setAnnualTarget] = useState(() => {
     const specific = localStorage.getItem(`annualTarget_${store.id}`);
     if (specific) return Number(specific);
-    return 1000000; // 預設 100萬
+    return 1000000;
   });
 
   // 表單與 UI 狀態
@@ -240,8 +223,13 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
   const [isDownloading, setIsDownloading] = useState(false);
   const [syncToast, setSyncToast] = useState({ show: false, message: '', type: 'success' });
 
+  // 當前週預算編輯狀態
   const [isEditingBudget, setIsEditingBudget] = useState(false);
-  const [tempBudget, setTempBudget] = useState(weeklyBudget);
+  const [tempBudget, setTempBudget] = useState('');
+  
+  // 歷史預算編輯狀態
+  const [editingPastBudget, setEditingPastBudget] = useState(null); // { period, amount }
+
   const [isBudgetSynced, setIsBudgetSynced] = useState(true);
 
   // 年度營收目標編輯狀態
@@ -252,41 +240,30 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
   const [reportType, setReportType] = useState('weekly'); 
   const [reportViewMode, setReportViewMode] = useState('desktop'); 
 
-  // 設定彈窗的暫存店鋪資料
   const [tempStores, setTempStores] = useState(stores);
 
-  // 切換店鋪時自動下載雲端資料
+  const todayString = new Date().toISOString().split('T')[0];
+  const currentWeekString = getCustomWeekRange(todayString);
+  const currentBudget = weeklyBudgets[currentWeekString] || weeklyBudgets.default || 20000;
+
   useEffect(() => {
-    if (store.webhookUrl) {
-      handleDownloadFromCloud();
-    }
+    if (store.webhookUrl) handleDownloadFromCloud();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 當資料改變時，自動儲存到對應的瀏覽器 localStorage
   useEffect(() => {
     localStorage.setItem(`purchaseCategories_${store.id}`, JSON.stringify(categories));
-    if (!categories.includes(category) && categories.length > 0) {
-      setCategory(categories[0]);
-    }
+    if (!categories.includes(category) && categories.length > 0) setCategory(categories[0]);
   }, [categories, category, store.id]);
 
-  useEffect(() => {
-    localStorage.setItem(`purchaseEntries_${store.id}`, JSON.stringify(entries));
-  }, [entries, store.id]);
-
-  useEffect(() => {
-    localStorage.setItem(`purchaseRevenues_${store.id}`, JSON.stringify(revenues));
-  }, [revenues, store.id]);
+  useEffect(() => localStorage.setItem(`purchaseEntries_${store.id}`, JSON.stringify(entries)), [entries, store.id]);
+  useEffect(() => localStorage.setItem(`purchaseRevenues_${store.id}`, JSON.stringify(revenues)), [revenues, store.id]);
+  useEffect(() => localStorage.setItem(`weeklyBudgets_${store.id}`, JSON.stringify(weeklyBudgets)), [weeklyBudgets, store.id]);
 
   const handleAddCategory = () => {
     const newCat = newCategoryName.trim();
     if (!newCat) return;
-
-    if (categories.includes(newCat)) {
-      alert('這個廠商或分類名稱已經存在囉！');
-      return;
-    }
+    if (categories.includes(newCat)) { alert('這個廠商或分類已經存在囉！'); return; }
     setCategories([...categories, newCat]);
     setCategory(newCat);
     setNewCategoryName('');
@@ -294,52 +271,42 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
   };
 
   const handleRemoveCategory = (catToRemove) => {
-    if (categories.length <= 1) {
-      alert('請至少保留一個廠商分類喔！');
-      return;
-    }
-    if (window.confirm(`確定要刪除「${catToRemove}」嗎？\n(不影響已登錄的歷史紀錄)`)) {
+    if (categories.length <= 1) { alert('請至少保留一個廠商分類喔！'); return; }
+    if (window.confirm(`確定要刪除「${catToRemove}」嗎？\n(不影響已登錄紀錄)`)) {
       setCategories(categories.filter(c => c !== catToRemove));
     }
   };
 
-  // 從雲端下載資料，現在完全支援同步「年度營收目標」
   const handleDownloadFromCloud = async () => {
     if (!store.webhookUrl) return;
     setIsDownloading(true);
     try {
-      const response = await fetch(store.webhookUrl, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' }
-      });
-      
+      const response = await fetch(store.webhookUrl, { method: 'GET', headers: { 'Accept': 'application/json' }});
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       
       const json = await response.json();
       let data = [];
-      let fetchedBudget = null;
-      let fetchedAnnualTarget = null;
-
+      
       if (Array.isArray(json)) {
         data = json;
       } else if (json && json.data) {
         data = json.data;
-        if (json.budget !== undefined) fetchedBudget = json.budget;
-        if (json.annualTarget !== undefined) fetchedAnnualTarget = json.annualTarget;
-      }
+        
+        // 載入歷史預算
+        if (json.weeklyBudgets) {
+          setWeeklyBudgets(json.weeklyBudgets);
+          setIsBudgetSynced(true);
+        } else if (json.budget) {
+          // 兼容舊版單一預算
+          setWeeklyBudgets(prev => ({ ...prev, default: Number(json.budget) }));
+        }
 
-      if (fetchedBudget !== null) {
-        setWeeklyBudget(Number(fetchedBudget));
-        setTempBudget(Number(fetchedBudget));
-        localStorage.setItem(`weeklyBudget_${store.id}`, fetchedBudget.toString());
-        setIsBudgetSynced(true);
-      }
-
-      if (fetchedAnnualTarget !== null) {
-        setAnnualTarget(Number(fetchedAnnualTarget));
-        setTempAnnualTarget(Number(fetchedAnnualTarget));
-        localStorage.setItem(`annualTarget_${store.id}`, fetchedAnnualTarget.toString());
-        setIsAnnualTargetSynced(true);
+        if (json.annualTarget !== undefined) {
+          setAnnualTarget(Number(json.annualTarget));
+          setTempAnnualTarget(Number(json.annualTarget));
+          localStorage.setItem(`annualTarget_${store.id}`, json.annualTarget.toString());
+          setIsAnnualTargetSynced(true);
+        }
       }
       
       if (Array.isArray(data)) {
@@ -377,12 +344,7 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
     if (!date || !amount || isNaN(amount)) return;
     if (entryType === 'cost' && !category) return;
 
-    const newRecord = {
-      id: Date.now().toString(),
-      date,
-      amount: parseFloat(amount),
-      isSynced: false
-    };
+    const newRecord = { id: Date.now().toString(), date, amount: parseFloat(amount), isSynced: false };
 
     if (entryType === 'cost') {
       newRecord.category = category;
@@ -396,7 +358,6 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
     setTimeout(() => setShowSuccess(false), 2000);
   };
 
-  // 手動同步功能 (包含預算與年度目標數值)
   const handleManualSync = async () => {
     if (!store.webhookUrl) {
       setSyncToast({ show: true, message: '請先於 ⚙️ 設定此店鋪的 Webhook 網址！', type: 'error' });
@@ -410,8 +371,8 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
     try {
       const payload = {
         action: 'overwrite',
-        budget: weeklyBudget,
-        annualTarget: annualTarget, // 將最新的年度預算也送出
+        weeklyBudgets: weeklyBudgets,
+        annualTarget: annualTarget,
         data: [
           ...entries.map(e => ({ id: e.id, date: e.date, type: '進貨成本', category: e.category, amount: e.amount })),
           ...revenues.map(r => ({ id: r.id, date: r.date, type: '營業收入', category: '每日營收', amount: r.amount }))
@@ -467,11 +428,23 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
     setEditingEntry(null);
   };
 
+  // 儲存當週預算
   const handleSaveBudget = () => {
     const newBudget = Number(tempBudget);
-    setWeeklyBudget(newBudget);
-    localStorage.setItem(`weeklyBudget_${store.id}`, newBudget.toString());
+    setWeeklyBudgets(prev => {
+      const updated = { ...prev, [currentWeekString]: newBudget, default: newBudget };
+      return updated;
+    });
     setIsEditingBudget(false);
+    setIsBudgetSynced(false);
+  };
+
+  // 儲存歷史某週預算
+  const handleSavePastBudget = (e) => {
+    e.preventDefault();
+    const newBudget = Number(editingPastBudget.amount);
+    setWeeklyBudgets(prev => ({ ...prev, [editingPastBudget.period]: newBudget }));
+    setEditingPastBudget(null);
     setIsBudgetSynced(false);
   };
 
@@ -483,12 +456,9 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
     setIsAnnualTargetSynced(false);
   };
 
-  // 儲存設定 (多店鋪更新)
   const handleSaveSettings = () => {
     setStores(tempStores);
-    if (!tempStores.find(s => s.id === activeStoreId)) {
-       setActiveStoreId(tempStores[0].id);
-    }
+    if (!tempStores.find(s => s.id === activeStoreId)) setActiveStoreId(tempStores[0].id);
     setShowSettings(false);
   };
 
@@ -500,14 +470,9 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
       ...revenues.map(r => ({ ...r, type: '營業收入', category: '每日營收' }))
     ].sort((a, b) => new Date(b.date) - new Date(a.date));
 
-    if (combined.length === 0) {
-      alert("目前尚無任何紀錄可匯出！");
-      return;
-    }
+    if (combined.length === 0) { alert("目前尚無任何紀錄可匯出！"); return; }
 
-    const csvRows = combined.map(e => 
-      `${e.date},${getCustomWeekRange(e.date)},${e.type},${e.category},${e.amount}`
-    );
+    const csvRows = combined.map(e => `${e.date},${getCustomWeekRange(e.date)},${e.type},${e.category},${e.amount}`);
     const csvContent = BOM + [headers.join(','), ...csvRows].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -520,39 +485,27 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
     document.body.removeChild(link);
   };
 
-  // 取得今天的相關時間資訊
   const today = new Date();
   const currentYear = today.getFullYear();
-  const currentMonth = today.getMonth(); // 0-11
-  const todayString = today.toISOString().split('T')[0];
-  const currentWeekString = getCustomWeekRange(todayString);
+  const currentMonth = today.getMonth(); 
 
-  // 1. 每週進貨預算計算
+  // 當週進貨預算計算
   const currentWeekEntries = entries.filter(entry => getCustomWeekRange(entry.date) === currentWeekString);
   const currentWeekTotal = currentWeekEntries.reduce((sum, entry) => sum + entry.amount, 0);
-  
-  const remainingAmount = weeklyBudget - currentWeekTotal;
-  const remainingRatio = weeklyBudget > 0 ? remainingAmount / weeklyBudget : 0;
+  const remainingAmount = currentBudget - currentWeekTotal;
+  const remainingRatio = currentBudget > 0 ? remainingAmount / currentBudget : 0;
   const isLowBudget = remainingRatio < 0.3;
   const isOverBudget = remainingAmount < 0;
-  const spentPercentage = weeklyBudget > 0 ? Math.min((currentWeekTotal / weeklyBudget) * 100, 100) : 0;
+  const spentPercentage = currentBudget > 0 ? Math.min((currentWeekTotal / currentBudget) * 100, 100) : 0;
 
-  // 2. 本月損益估算
-  const currentMonthEntries = entries.filter(e => {
-    const d = new Date(e.date);
-    return d.getFullYear() === currentYear && d.getMonth() === currentMonth;
-  });
+  // 本月損益估算
+  const currentMonthEntries = entries.filter(e => new Date(e.date).getFullYear() === currentYear && new Date(e.date).getMonth() === currentMonth);
   const currentMonthTotalCost = currentMonthEntries.reduce((sum, e) => sum + e.amount, 0);
-
-  const currentMonthRevenuesData = revenues.filter(r => {
-    const d = new Date(r.date);
-    return d.getFullYear() === currentYear && d.getMonth() === currentMonth;
-  });
+  const currentMonthRevenuesData = revenues.filter(r => new Date(r.date).getFullYear() === currentYear && new Date(r.date).getMonth() === currentMonth);
   const currentMonthTotalRevenue = currentMonthRevenuesData.reduce((sum, r) => sum + r.amount, 0);
-  
   const currentMonthGrossProfit = currentMonthTotalRevenue - currentMonthTotalCost;
 
-  // 3. 年度營收目標計算
+  // 年度營收目標計算
   const currentYearRevenuesData = revenues.filter(r => new Date(r.date).getFullYear() === currentYear);
   const currentYearTotalRevenue = currentYearRevenuesData.reduce((sum, r) => sum + r.amount, 0);
   const annualProgressPercentage = annualTarget > 0 ? Math.min((currentYearTotalRevenue / annualTarget) * 100, 100) : 0;
@@ -569,10 +522,8 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
     return combinedRecords.filter(entry => {
       const typeStr = entry.recordType === 'cost' ? '進貨支出' : '每日營收';
       return (
-        entry.date.includes(query) ||
-        entry.category.toLowerCase().includes(query) ||
-        entry.amount.toString().includes(query) ||
-        typeStr.includes(query)
+        entry.date.includes(query) || entry.category.toLowerCase().includes(query) ||
+        entry.amount.toString().includes(query) || typeStr.includes(query)
       );
     });
   }, [combinedRecords, recordSearch]);
@@ -594,10 +545,16 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
     return Object.entries(data)
       .map(([period, info]) => {
         info.items.sort((a, b) => new Date(b.date) - new Date(a.date));
+        // 如果是週報表，附加上該週特有的預算
+        if (reportType === 'weekly') {
+          info.budget = weeklyBudgets[period] || weeklyBudgets.default || 20000;
+        } else {
+          info.budget = null;
+        }
         return { period, ...info };
       })
       .sort((a, b) => b.period.localeCompare(a.period));
-  }, [entries, revenues, reportType]);
+  }, [entries, revenues, reportType, weeklyBudgets]);
 
   const unsyncedCount = entries.filter(e => !e.isSynced).length + revenues.filter(r => !r.isSynced).length + (!isBudgetSynced ? 1 : 0) + (!isAnnualTargetSynced ? 1 : 0);
 
@@ -647,7 +604,7 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
 
             <button 
               onClick={() => {
-                setTempStores(stores); // 打開設定時載入最新清單
+                setTempStores(stores);
                 setShowSettings(true);
               }}
               className="p-2 text-[#8C7A6B] hover:text-[#7A303F] hover:bg-[#F5E6E8] rounded-full transition-colors relative ml-1"
@@ -678,10 +635,13 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
                   <div className="text-right flex flex-col items-end">
                     <span className="text-sm text-[#8C7A6B] mb-1">本週設定預算</span>
                     <button 
-                      onClick={() => setIsEditingBudget(true)}
+                      onClick={() => {
+                        setTempBudget(currentBudget);
+                        setIsEditingBudget(true);
+                      }}
                       className="flex items-center gap-1 text-lg font-bold text-[#4A3B32] hover:text-[#7A303F] transition-colors bg-[#F5F0EA] px-3 py-1 rounded-lg border border-[#E8DFD5]"
                     >
-                      {formatCurrency(weeklyBudget)}
+                      {formatCurrency(currentBudget)}
                       <Edit2 size={14} className="text-[#8C7A6B]" />
                     </button>
                   </div>
@@ -986,7 +946,6 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
         {activeTab === 'reports' && (
           <div className="space-y-6">
             
-            {/* 搬移過來的：本月損益速覽卡片 */}
             <div className="bg-[#FFFDFB] p-6 rounded-2xl shadow-sm border border-[#E8DFD5]">
               <h2 className="text-lg font-bold flex items-center gap-2 text-[#4A3B32] mb-5">
                 <CalendarDays className="text-[#7A303F]" size={20} />
@@ -1010,7 +969,6 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
               </div>
             </div>
 
-            {/* 搬移過來的：年度營收目標卡片 */}
             <div className="bg-[#FFFDFB] p-6 rounded-2xl shadow-sm border border-[#E8DFD5] relative overflow-hidden">
               <div className="flex justify-between items-start mb-4">
                 <div>
@@ -1113,7 +1071,7 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
                 </div>
               ) : (
                 <>
-                  <SimpleLineChart data={reportData} />
+                  <SimpleLineChart data={reportData} reportType={reportType} />
                   
                   {reportViewMode === 'mobile' ? (
                     reportData.map((group, index) => (
@@ -1123,20 +1081,34 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
                             <Calendar size={18} className="text-[#7A303F]"/>
                             {group.period}
                           </h3>
-                          <div className="flex justify-between w-full text-sm mt-2">
-                            <div className="text-[#8C7A6B]">
-                              <span className="block text-xs text-[#8C7A6B]">營收</span>
-                              <span className="font-semibold text-emerald-600">{formatCurrency(group.totalRevenue)}</span>
-                            </div>
-                            <div className="text-[#8C7A6B] text-center">
-                              <span className="block text-xs text-[#8C7A6B]">成本</span>
-                              <span className="font-semibold text-[#7A303F]">{formatCurrency(group.totalCost)}</span>
-                            </div>
-                            <div className="text-right">
-                              <span className="block text-xs text-[#8C7A6B]">毛利</span>
-                              <span className={`font-bold ${group.totalRevenue - group.totalCost >= 0 ? 'text-[#A87C63]' : 'text-red-500'}`}>
-                                {formatCurrency(group.totalRevenue - group.totalCost)}
-                              </span>
+                          <div className="flex flex-col w-full text-sm mt-2 space-y-2">
+                            {/* 新增歷史預算編輯區 (僅週報表顯示) */}
+                            {reportType === 'weekly' && (
+                               <div className="flex justify-between items-center bg-[#F5E6E8]/30 p-2 rounded-lg border border-[#DBCFC3] border-dashed">
+                                 <span className="text-[#8C7A6B] font-bold">當週預算設定</span>
+                                 <button 
+                                   onClick={() => setEditingPastBudget({ period: group.period, amount: group.budget })}
+                                   className="text-blue-600 font-bold hover:text-blue-800 flex items-center gap-1"
+                                 >
+                                   {formatCurrency(group.budget)} <Edit2 size={12}/>
+                                 </button>
+                               </div>
+                            )}
+                            <div className="flex justify-between w-full">
+                              <div className="text-[#8C7A6B]">
+                                <span className="block text-xs text-[#8C7A6B]">總營收</span>
+                                <span className="font-semibold text-emerald-600">{formatCurrency(group.totalRevenue)}</span>
+                              </div>
+                              <div className="text-[#8C7A6B] text-center">
+                                <span className="block text-xs text-[#8C7A6B]">總成本</span>
+                                <span className="font-semibold text-[#7A303F]">{formatCurrency(group.totalCost)}</span>
+                              </div>
+                              <div className="text-right">
+                                <span className="block text-xs text-[#8C7A6B]">結算毛利</span>
+                                <span className={`font-bold ${group.totalRevenue - group.totalCost >= 0 ? 'text-[#A87C63]' : 'text-red-500'}`}>
+                                  {formatCurrency(group.totalRevenue - group.totalCost)}
+                               </span>
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -1172,7 +1144,7 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
                               <th className="p-4 font-bold">日期</th>
                               <th className="p-4 font-bold">項目類型</th>
                               <th className="p-4 font-bold text-right">單筆金額</th>
-                              <th className="p-4 font-bold text-right w-1/4">區間總計 (營收/成本/毛利)</th>
+                              <th className="p-4 font-bold text-right w-1/4">區間總結算</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1203,6 +1175,18 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
                                     {index === 0 && (
                                       <td className="p-4 align-top border-l border-[#E8DFD5] bg-[#F5F0EA]/30" rowSpan={group.items.length}>
                                         <div className="space-y-2 text-right">
+                                          {/* 新增歷史預算編輯區 (僅週報表顯示) */}
+                                          {reportType === 'weekly' && (
+                                            <div className="flex justify-between text-xs pb-2 mb-2 border-b border-[#DBCFC3] border-dashed">
+                                              <span className="text-[#8C7A6B]">設定預算</span>
+                                              <button 
+                                                onClick={() => setEditingPastBudget({ period: group.period, amount: group.budget })}
+                                                className="font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1 transition-colors"
+                                              >
+                                                {formatCurrency(group.budget)} <Edit2 size={12}/>
+                                              </button>
+                                            </div>
+                                          )}
                                           <div className="flex justify-between text-xs">
                                             <span className="text-[#8C7A6B]">總營收</span>
                                             <span className="font-semibold text-emerald-600">{formatCurrency(group.totalRevenue)}</span>
@@ -1235,6 +1219,42 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
           </div>
         )}
       </main>
+
+      {/* 歷史預算編輯 Modal */}
+      {editingPastBudget && (
+        <div className="fixed inset-0 bg-stone-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-[#FFFDFB] rounded-2xl shadow-xl border border-[#E8DFD5] w-full max-w-sm overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-[#E8DFD5] flex justify-between items-center bg-[#F5F0EA]/50">
+              <h3 className="font-bold text-lg flex items-center gap-2 text-[#4A3B32]">
+                <Edit2 size={18} className="text-blue-600" />
+                補登 / 修改預算
+              </h3>
+            </div>
+            <form onSubmit={handleSavePastBudget} className="p-6 space-y-4">
+              <div className="text-sm text-[#8C7A6B] font-bold text-center mb-4 bg-[#F5F0EA] py-2 rounded-lg">
+                週期：{editingPastBudget.period}
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-[#4A3B32]">預算金額 (NT$)</label>
+                <input 
+                  type="number" 
+                  required
+                  min="0"
+                  step="1"
+                  value={editingPastBudget.amount}
+                  onChange={(e) => setEditingPastBudget({...editingPastBudget, amount: e.target.value})}
+                  className="w-full p-3 rounded-xl border border-[#DBCFC3] bg-[#F5F0EA] focus:bg-[#FFFDFB] focus:ring-2 focus:ring-blue-600 outline-none transition-all text-lg font-medium"
+                  autoFocus
+                />
+              </div>
+              <div className="pt-2 flex gap-3">
+                <button type="button" onClick={() => setEditingPastBudget(null)} className="flex-1 py-3 bg-[#E8DFD5] hover:bg-[#DBCFC3] text-[#4A3B32] rounded-xl font-bold transition-colors">取消</button>
+                <button type="submit" className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-md transition-all">儲存修改</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* 系統設定與廠商管理 Modal */}
       {showSettings && (
@@ -1411,13 +1431,14 @@ function StoreManager({ store, stores, setStores, activeStoreId, setActiveStoreI
   );
 }
 
-// SVG 折線圖元件
-function SimpleLineChart({ data }) {
+// SVG 折線圖元件 (加入預算第三線)
+function SimpleLineChart({ data, reportType }) {
   const [hoverIndex, setHoverIndex] = useState(null);
   const chartData = [...data].reverse();
   if (chartData.length < 1) return null;
 
-  const maxVal = Math.max(...chartData.map(d => Math.max(d.totalCost, d.totalRevenue)), 100) * 1.1; 
+  // 加入預算一起計算折線圖的最高點
+  const maxVal = Math.max(...chartData.map(d => Math.max(d.totalCost, d.totalRevenue, d.budget || 0)), 100) * 1.1; 
   const w = 800, h = 250, p = 40;
 
   const getX = (i) => p + (i * (w - 2 * p) / Math.max(chartData.length - 1, 1));
@@ -1425,16 +1446,20 @@ function SimpleLineChart({ data }) {
 
   const costPoints = chartData.map((d, i) => `${getX(i)},${getY(d.totalCost)}`).join(' ');
   const revPoints = chartData.map((d, i) => `${getX(i)},${getY(d.totalRevenue)}`).join(' ');
+  const budgetPoints = chartData.map((d, i) => `${getX(i)},${getY(d.budget || 0)}`).join(' ');
 
   return (
     <div className="bg-[#FFFDFB] p-5 rounded-2xl shadow-sm border border-[#E8DFD5] overflow-x-auto">
       <div className="flex justify-between items-center mb-6 px-2 min-w-[500px]">
         <h3 className="font-bold text-[#4A3B32] flex items-center gap-2">
-          <TrendingUp className="text-[#7A303F]" size={18} /> 收支趨勢折線圖
+          <TrendingUp className="text-[#7A303F]" size={18} /> 收支與預算趨勢
         </h3>
         <div className="flex gap-4 text-sm font-bold">
           <span className="flex items-center gap-1 text-emerald-600"><div className="w-3 h-3 bg-emerald-500 rounded-full"></div>營收</span>
           <span className="flex items-center gap-1 text-[#7A303F]"><div className="w-3 h-3 bg-[#7A303F] rounded-full"></div>成本</span>
+          {reportType === 'weekly' && (
+            <span className="flex items-center gap-1 text-[#d97706]"><div className="w-3 h-3 bg-[#d97706] rounded-full"></div>預算</span>
+          )}
         </div>
       </div>
       <div className="min-w-[500px] relative">
@@ -1461,6 +1486,9 @@ function SimpleLineChart({ data }) {
 
           {chartData.length > 1 && (
             <>
+              {reportType === 'weekly' && (
+                <polyline points={budgetPoints} fill="none" stroke="#d97706" strokeWidth="2" strokeDasharray="6 4" strokeLinecap="round" strokeLinejoin="round" />
+              )}
               <polyline points={costPoints} fill="none" stroke="#7A303F" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
               <polyline points={revPoints} fill="none" stroke="#10b981" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
             </>
@@ -1468,6 +1496,9 @@ function SimpleLineChart({ data }) {
           
           {chartData.map((d, i) => (
             <g key={i}>
+              {reportType === 'weekly' && (
+                <circle cx={getX(i)} cy={getY(d.budget || 0)} r={hoverIndex === i ? "4" : "3"} fill="#d97706" className="transition-all duration-200" />
+              )}
               <circle cx={getX(i)} cy={getY(d.totalCost)} r={hoverIndex === i ? "6" : "4"} fill="#7A303F" className="transition-all duration-200" />
               <circle cx={getX(i)} cy={getY(d.totalRevenue)} r={hoverIndex === i ? "6" : "4"} fill="#10b981" className="transition-all duration-200" />
               <text x={getX(i)} y={h - p + 20} textAnchor="middle" fill={hoverIndex === i ? "#4A3B32" : "#8C7A6B"} className={`text-[10px] md:text-xs transition-colors ${hoverIndex === i ? 'font-bold' : ''}`}>
@@ -1476,7 +1507,7 @@ function SimpleLineChart({ data }) {
             </g>
           ))}
 
-          {/* 隱藏的 Hover 感應區塊 (滑鼠不需精準點擊圓點也能觸發) */}
+          {/* 隱藏的 Hover 感應區塊 */}
           {chartData.map((d, i) => {
             const x = getX(i);
             const width = chartData.length > 1 ? (w - 2 * p) / (chartData.length - 1) : 100;
@@ -1498,16 +1529,15 @@ function SimpleLineChart({ data }) {
           {/* Tooltip 資訊浮窗 */}
           {hoverIndex !== null && (() => {
             const d = chartData[hoverIndex];
-            // 智慧計算 Tooltip 位置，避免右側或頂部超出版面被裁切
             let ttX = getX(hoverIndex) + 15;
             if (ttX + 160 > w) ttX = getX(hoverIndex) - 175;
             
             let ttY = Math.min(getY(d.totalCost), getY(d.totalRevenue)) - 50;
             if (ttY < 10) ttY = 10;
-            if (ttY + 120 > h) ttY = h - 120;
+            if (ttY + 140 > h) ttY = h - 140;
 
             return (
-              <foreignObject x={ttX} y={ttY} width="160" height="130" className="pointer-events-none transition-all duration-200">
+              <foreignObject x={ttX} y={ttY} width="160" height={reportType === 'weekly' ? "150" : "130"} className="pointer-events-none transition-all duration-200">
                 <div className="bg-[#4A3B32]/95 backdrop-blur-md text-[#FFFDFB] p-3 rounded-xl shadow-xl text-sm w-full h-full box-border flex flex-col justify-center border border-[#8C7A6B]/30">
                   <div className="font-bold mb-2 border-b border-[#8C7A6B]/50 pb-1 text-center whitespace-nowrap text-xs">
                     {d.period}
@@ -1520,6 +1550,12 @@ function SimpleLineChart({ data }) {
                     <span className="text-rose-400 text-xs">成本</span>
                     <span className="font-semibold text-xs">{formatCurrency(d.totalCost)}</span>
                   </div>
+                  {reportType === 'weekly' && (
+                    <div className="flex justify-between gap-3 mb-1">
+                      <span className="text-amber-400 text-xs">預算</span>
+                      <span className="font-semibold text-xs">{formatCurrency(d.budget)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between gap-3 mt-1 pt-2 border-t border-[#8C7A6B]/50 font-bold">
                     <span className="text-[#E8DFD5] text-xs">毛利</span>
                     <span className={`text-xs ${d.totalRevenue - d.totalCost >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
